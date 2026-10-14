@@ -1,18 +1,30 @@
-// Payam Logger Capture — silent screenshot backend.
+// Payam Logger Capture — silent screenshot backend + activity reporter.
 //
-// Exposes org.payam.Logger.Capture(filepath) on the session bus. It captures
-// the whole screen with Shell.Screenshot — the exact same object gnome-shell
-// uses internally (js/ui/screenshot.js: new Shell.Screenshot()) — WITHOUT the
-// flash and shutter sound that the portal and org.gnome.Shell.Screenshot
-// D-Bus paths hardcode (see docs/capture.md).
+// D-Bus interface org.payam.Logger on the session bus:
 //
-// Security notes:
+//   Methods:
+//     Capture(filepath) → (success, error_message)
+//         Fully silent screenshot via gnome-shell's internal
+//         Shell.Screenshot object (no flash/sound/dialog).
+//     GetStatus() → (app, title, workspace, idle)
+//         Current focused-window state + idle flag.
+//
+//   Signals:
+//     FocusChanged(app, title, workspace)
+//         Emitted when the focused window, its title or the workspace
+//         changes (deduplicated + throttled).
+//     IdleChanged(idle)
+//         Emitted when the user crosses the idle threshold (true) or
+//         becomes active again (false).
+//
+// Security notes (Capture):
 //  - writes are restricted to ~/.local/share/payam-logger/
 //  - refuses when saving to disk is locked down by the administrator
 //  - refuses while the session is locked
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -31,11 +43,32 @@ const DBUS_INTERFACE = `
       <arg type="b" direction="out" name="success"/>
       <arg type="s" direction="out" name="error_message"/>
     </method>
+    <method name="GetStatus">
+      <arg type="s" direction="out" name="app"/>
+      <arg type="s" direction="out" name="title"/>
+      <arg type="i" direction="out" name="workspace"/>
+      <arg type="b" direction="out" name="idle"/>
+    </method>
+    <signal name="FocusChanged">
+      <arg type="s" name="app"/>
+      <arg type="s" name="title"/>
+      <arg type="i" name="workspace"/>
+    </signal>
+    <signal name="IdleChanged">
+      <arg type="b" name="idle"/>
+    </signal>
     <property name="Version" type="u" access="read"/>
   </interface>
 </node>`;
 
-const EXTENSION_VERSION = 1;
+const EXTENSION_VERSION = 2;
+
+// After this many ms without input the user counts as idle/away.
+const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
+
+// Minimum ms between two FocusChanged emissions for the same state
+// (guards against hyperactive title changes, e.g. terminals/clocks).
+const FOCUS_EMIT_MIN_INTERVAL_MS = 1000;
 
 export default class PayamLoggerExtension extends Extension {
     enable() {
@@ -48,10 +81,17 @@ export default class PayamLoggerExtension extends Extension {
         this._nameOwnerId = Gio.DBus.session.own_name(
             BUS_NAME, Gio.BusNameOwnerFlags.REPLACE, null, null);
 
-        console.log('[payam-logger] extension enabled');
+        this._idle = false;
+        this._lastEmit = 0;
+        this._watchIds = [];
+
+        this._setupActivityTracking();
+        console.log('[payam-logger] extension enabled (v2: activity tracking)');
     }
 
     disable() {
+        this._teardownActivityTracking();
+
         Gio.DBus.session.unown_name(this._nameOwnerId);
         this._dbus.unexport();
         this._dbus = null;
@@ -63,6 +103,115 @@ export default class PayamLoggerExtension extends Extension {
 
     get Version() {
         return EXTENSION_VERSION;
+    }
+
+    // --- activity tracking ------------------------------------------------
+
+    _setupActivityTracking() {
+        this._watchIds.push(
+            global.display.connect('notify::focus-window',
+                () => this._onFocusChanged()));
+
+        this._watchIds.push(
+            global.workspace_manager.connect('workspace-switched',
+                () => this._onFocusChanged()));
+
+        // Idle/away detection via Mutter's IdleMonitor.
+        const monitor = Meta.get_backend().get_idle_monitor();
+        this._idleWatchId = monitor.add_idle_watch(IDLE_THRESHOLD_MS, () => {
+            // Fires each time the user *has been* idle for the threshold;
+            // only report the transition once until activity resumes.
+            if (!this._idle) {
+                this._idle = true;
+                this._emitIdle(true);
+            }
+        });
+        this._activeWatchId = monitor.add_user_active_watch(() => {
+            if (this._idle) {
+                this._idle = false;
+                this._emitIdle(false);
+            }
+        });
+    }
+
+    _teardownActivityTracking() {
+        for (const id of this._watchIds)
+            global.display.disconnect(id);
+        this._watchIds = [];
+
+        const monitor = Meta.get_backend().get_idle_monitor();
+        if (this._idleWatchId) {
+            monitor.remove_watch(this._idleWatchId);
+            this._idleWatchId = 0;
+        }
+        if (this._activeWatchId) {
+            monitor.remove_watch(this._activeWatchId);
+            this._activeWatchId = 0;
+        }
+    }
+
+    _onFocusChanged() {
+        const state = this._focusState();
+
+        // Suppress no-op repeats (same app+title+workspace).
+        if (this._lastFocus &&
+            this._lastFocus.app === state.app &&
+            this._lastFocus.title === state.title &&
+            this._lastFocus.workspace === state.workspace)
+            return;
+
+        // Follow title changes of the currently focused window too.
+        this._trackTitleChanges();
+
+        // Throttle: never more than one signal per
+        // FOCUS_EMIT_MIN_INTERVAL_MS (spammy titles are deduped above,
+        // this only rate-limits genuinely alternating titles).
+        const now = GLib.get_monotonic_time() / 1000;
+        if (this._lastFocus && now - this._lastEmit < FOCUS_EMIT_MIN_INTERVAL_MS / 1000)
+            return;
+        this._lastEmit = now;
+        this._lastFocus = state;
+
+        this._dbus.emit_signal('FocusChanged',
+            GLib.Variant.new('(ssi)', [state.app, state.title, state.workspace]));
+    }
+
+    // Watch title changes of the focused window.
+    _trackTitleChanges() {
+        if (this._titleWatchId) {
+            global.display.disconnect(this._titleWatchId);
+            this._titleWatchId = 0;
+        }
+        const win = global.display.focus_window;
+        if (win) {
+            this._titleWatchId = win.connect('notify::title',
+                () => this._onFocusChanged());
+        }
+    }
+
+    _focusState() {
+        const win = global.display.focus_window;
+        let app = '';
+        let title = '';
+        if (win) {
+            // GTK apps report a proper application id; fall back to wm_class.
+            app = win.get_gtk_application_id() || win.get_wm_class() || '';
+            title = win.get_title() || '';
+        }
+        const workspace = global.workspace_manager.get_active_workspace_index();
+        return {app, title, workspace};
+    }
+
+    _emitIdle(idle) {
+        this._dbus.emit_signal('IdleChanged', GLib.Variant.new('(b)', [idle]));
+        console.log(`[payam-logger] idle=${idle}`);
+    }
+
+    // --- D-Bus methods ------------------------------------------------------
+
+    GetStatus() {
+        const s = this._focusState();
+        return [s.app, s.title, s.workspace, this._idle];
     }
 
     // Calls are serialized: Shell.Screenshot permits only one operation at a

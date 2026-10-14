@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+
+	"github.com/payamam/payam-logger/internal/activity"
 	"github.com/payamam/payam-logger/internal/capture"
 	"github.com/payamam/payam-logger/internal/config"
 	"github.com/payamam/payam-logger/internal/scheduler"
@@ -28,14 +30,15 @@ const (
 
 // Daemon is the payam-loggerd background service.
 type Daemon struct {
-	cfg     *config.Config
-	backend capture.Backend
-	store   *storage.Store
-	log     *slog.Logger
-	sched   *scheduler.Scheduler
-	cleanup *scheduler.Scheduler // nil when retention is disabled
-	bus     *dbus.Conn
-	wg      sync.WaitGroup
+	cfg       *config.Config
+	backend   capture.Backend
+	store     *storage.Store
+	log       *slog.Logger
+	sched     *scheduler.Scheduler
+	cleanup   *scheduler.Scheduler // nil when retention is disabled
+	collector *activity.Collector
+	bus       *dbus.Conn
+	wg        sync.WaitGroup
 
 	// isLocked reports whether the session is currently locked. Injectable
 	// for tests; nil means lock detection is unavailable.
@@ -54,7 +57,8 @@ func New(cfg *config.Config, backend capture.Backend, store *storage.Store, log 
 
 	// Lock detection (GNOME screensaver). When unavailable we simply
 	// keep capturing; the extension itself also refuses while locked.
-	bus, err := dbus.SessionBus()
+	// Private connection so Close() never hits the shared godbus one.
+	bus, err := dbus.ConnectSessionBus()
 	if err != nil {
 		log.Warn("session bus unavailable — lock detection disabled", "err", err)
 	} else {
@@ -64,6 +68,14 @@ func New(cfg *config.Config, backend capture.Backend, store *storage.Store, log 
 
 	if cfg.Storage.RetentionDays > 0 {
 		d.cleanup = scheduler.New(cleanupInterval, log)
+	}
+
+	// Activity tracking (M1): focused window + active/away segments from
+	// the GNOME Shell extension. Optional — screenshots work without it.
+	if collector, err := activity.NewCollector(store, log); err != nil {
+		log.Warn("activity tracking disabled", "err", err)
+	} else {
+		d.collector = collector
 	}
 
 	return d
@@ -92,6 +104,17 @@ func (d *Daemon) Run(ctx context.Context) error {
 			if err := d.cleanup.Run(ctx, d.cleanupOnce); err != nil &&
 				!errors.Is(err, context.Canceled) {
 				d.log.Error("cleanup scheduler failed", "err", err)
+			}
+		}()
+	}
+
+	if d.collector != nil {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			if err := d.collector.Run(ctx); err != nil &&
+				!errors.Is(err, context.Canceled) {
+				d.log.Error("activity collector failed", "err", err)
 			}
 		}()
 	}

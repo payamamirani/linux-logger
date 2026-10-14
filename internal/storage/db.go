@@ -12,7 +12,7 @@ import (
 
 // schemaVersion is the current DB schema version, stored in
 // PRAGMA user_version. Migrations bump this and add steps below.
-const schemaVersion = 1
+const schemaVersion = 2
 
 // migrations maps a schema version to the statements that upgrade a DB from
 // that version to the next one.
@@ -34,6 +34,37 @@ var migrations = map[int][]string{
 		)`,
 		`CREATE INDEX idx_screenshots_taken_at ON screenshots(taken_at)`,
 		`CREATE INDEX idx_screenshots_day ON screenshots(day)`,
+	},
+	1: {
+		// v2 (M1 data engine): activity tracking.
+		`CREATE TABLE app_usage (
+			id        INTEGER PRIMARY KEY,
+			start     TEXT NOT NULL,      -- RFC3339, local
+			end       TEXT NOT NULL,
+			day       TEXT NOT NULL,      -- YYYY-MM-DD (local)
+			app       TEXT NOT NULL,      -- gtk app id / wm_class
+			title     TEXT NOT NULL,
+			workspace INTEGER
+		)`,
+		`CREATE INDEX idx_app_usage_day ON app_usage(day)`,
+		`CREATE TABLE computer_usage (
+			id    INTEGER PRIMARY KEY,
+			start TEXT NOT NULL,
+			end   TEXT NOT NULL,
+			day   TEXT NOT NULL,
+			state TEXT NOT NULL           -- 'active' | 'away'
+		)`,
+		`CREATE INDEX idx_computer_usage_day ON computer_usage(day)`,
+		`CREATE TABLE tags (              -- used from M3 on
+			id       INTEGER PRIMARY KEY,
+			start    TEXT NOT NULL,
+			end      TEXT NOT NULL,
+			day      TEXT NOT NULL,
+			name     TEXT NOT NULL,      -- comma-separated hierarchy
+			note     TEXT,
+			billable INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX idx_tags_day ON tags(day)`,
 	},
 }
 

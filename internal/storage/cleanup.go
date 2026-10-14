@@ -53,6 +53,14 @@ func (s *Store) Cleanup(ctx context.Context, before time.Time) (int, error) {
 	}
 	deleted, _ := res.RowsAffected()
 
+	// Activity data follows the same retention window.
+	for _, table := range []string{"app_usage", "computer_usage", "tags"} {
+		if _, err := s.db.ExecContext(ctx,
+			fmt.Sprintf(`DELETE FROM %s WHERE day < ?`, table), cutoffDay); err != nil {
+			return int(deleted), fmt.Errorf("delete expired %s: %w", table, err)
+		}
+	}
+
 	s.removeEmptyDayDirs()
 
 	return int(deleted), nil
