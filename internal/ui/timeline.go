@@ -261,7 +261,7 @@ func (t *TimelineStack) SetActiveTrack(kind TrackKind) {
 // ClearSelection removes the current selection.
 func (t *TimelineStack) ClearSelection() {
 	t.selStart, t.selEnd = -1, -1
-	t.QueueDraw()
+	t.redraw()
 	t.emitSelection()
 }
 
@@ -280,7 +280,7 @@ func (t *TimelineStack) selection() (float64, float64) {
 // SetSelection selects a range programmatically (details panel rows).
 func (t *TimelineStack) SetSelection(start, end float64) {
 	t.selStart, t.selEnd = start, end
-	t.QueueDraw()
+	t.redraw()
 	t.emitSelection()
 }
 
@@ -314,7 +314,7 @@ func (t *TimelineStack) SetDay(day string, records []storage.Record, appSegs, us
 	t.viewStart, t.viewSpan = t.dataSpanOrDefault()
 	t.selStart, t.selEnd = -1, -1
 	t.hover = -1
-	t.QueueDraw()
+	t.redraw()
 	t.emitSelection()
 }
 
@@ -379,7 +379,7 @@ func (t *TimelineStack) setViewStart(s float64) {
 		maxStart = 0
 	}
 	t.viewStart = math.Max(0, math.Min(s, maxStart))
-	t.QueueDraw()
+	t.redraw()
 }
 
 func (t *TimelineStack) xToSec(x float64) float64 {
@@ -443,20 +443,29 @@ func (t *TimelineStack) emitSelection() {
 	t.onSelection(lo, hi)
 }
 
+// redraw explicitly queues every drawing area — queueing the container
+// Box does NOT redraw its children in GTK4.
+func (t *TimelineStack) redraw() {
+	t.ruler.QueueDraw()
+	for _, tr := range t.tracks {
+		tr.da.QueueDraw()
+	}
+}
+
 // --- controllers ------------------------------------------------------------
 
 func (t *TimelineStack) attachControllers(w *gtk.DrawingArea, tr *track) {
 	motion := gtk.NewEventControllerMotion()
 	motion.ConnectMotion(func(x, y float64) {
 		t.hoverX, t.hover = x, t.xToSec(x)
-		t.QueueDraw()
+		t.redraw()
 		if t.onHover != nil {
 			t.onHover(t.hover)
 		}
 	})
 	motion.ConnectLeave(func() {
 		t.hover = -1
-		t.QueueDraw()
+		t.redraw()
 		if t.onHover != nil {
 			t.onHover(-1)
 		}
@@ -480,7 +489,7 @@ func (t *TimelineStack) attachControllers(w *gtk.DrawingArea, tr *track) {
 		t.selPressX, t.pressX, t.pressY = x, x, y
 		start := t.snap(t.xToSec(x))
 		t.selStart, t.selEnd = start, start
-		t.QueueDraw()
+		t.redraw()
 		t.emitSelection()
 	})
 	sel.ConnectDragUpdate(func(offsetX, offsetY float64) {
@@ -488,7 +497,7 @@ func (t *TimelineStack) attachControllers(w *gtk.DrawingArea, tr *track) {
 			return
 		}
 		t.selEnd = t.snap(t.xToSec(t.selPressX + offsetX))
-		t.QueueDraw()
+		t.redraw()
 		t.emitSelection()
 	})
 	sel.ConnectDragEnd(func(x, y float64) {
