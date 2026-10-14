@@ -45,7 +45,11 @@ func run(configPath string) error {
 		Level: parseLevel(cfg.Log.Level),
 	}))
 
-	backend, err := capture.New(cfg.Capture.Backend)
+	backend, err := capture.New(capture.Options{
+		Backend:     cfg.Capture.Backend,
+		DataDir:     cfg.Storage.DataDir,
+		JPEGQuality: cfg.Capture.JPEGQuality,
+	}, logger)
 	if err != nil {
 		return err
 	}

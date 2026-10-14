@@ -73,9 +73,10 @@ CREATE INDEX idx_screenshots_taken_at ON screenshots(taken_at);
 
 ## نقشه راه
 
-- [ ] پیاده‌سازی بک‌اند capture (portal → gnome-shell → x11) — ببینید [capture.md](capture.md)
+- [x] ~~پیاده‌سازی بک‌اند capture~~ — فاز ۱: `extension` (اصلی، بی‌صدا) + `portal` (fallback) + انتخاب خودکار `auto`
 - [ ] ایندکس SQLite + migration
 - [ ] retention/cleanup خودکار (`retention_days`)
 - [ ] فرانتند GTK4 (تایم‌لاین روزانه، پرش بین روزها)
+- [ ] تشخیص قفل صفحه/suspend و توقف capture (اکستنشن قفل را خودش تشخیص می‌دهد؛ suspend سمت دیمن)
 - [ ] جمع‌آوری اپ/پنجره فعال (اختیاری، مثل ManicTime)
-- [ ] بسته‌بندی (`.deb` یا فایل‌های نصب ساده)
+- [ ] بسته‌بندی (`.deb` شامل دیمن + اکستنشن + systemd unit)

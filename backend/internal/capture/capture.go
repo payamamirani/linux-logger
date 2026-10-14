@@ -1,79 +1,116 @@
 // Package capture takes screenshots of the active session.
 //
 // Capturing is backend-specific because the correct method depends on the
-// display server:
+// display server and desktop environment:
 //
-//   - Wayland (GNOME default on Ubuntu): applications are isolated from each
-//     other's pixels, so screenshots must go through a privileged API —
-//     either the XDG Desktop Portal or the GNOME Shell D-Bus API.
-//   - X11: any client can grab the screen (maim, scrot, XGetImage, ...).
+//   - "extension": calls the payam-logger GNOME Shell extension
+//     (org.payam.Logger), which uses gnome-shell's internal Shell.Screenshot
+//     object. Fully silent: no dialog, no flash, no shutter sound.
+//     Primary backend on GNOME Wayland (see docs/capture.md).
+//   - "portal": XDG Desktop Portal screenshot — works everywhere on Wayland
+//     but flashes and plays a sound on every capture (hardcoded in
+//     xdg-desktop-portal-gnome). Fallback.
+//   - "x11": direct X11 grab for Xorg sessions (maim/scrot). Fallback.
 //
-// Backends are selected via config ("auto" detects the session type) so the
-// rest of the daemon never needs to care about the display server.
+// "auto" probes the session bus and picks the best available backend.
 package capture
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
+	"log/slog"
 	"time"
+
+	"github.com/godbus/dbus/v5"
 )
 
 // ErrNotImplemented marks backend stubs that are pending implementation.
 var ErrNotImplemented = errors.New("capture backend not implemented yet")
 
-// Screenshot is a single captured frame.
+// Screenshot is a single captured frame, already re-encoded as JPEG.
 type Screenshot struct {
-	// Data holds the encoded image bytes (JPEG unless noted in MIME).
+	// Data holds the encoded JPEG bytes.
 	Data []byte
 
-	// MIME type of Data, e.g. "image/jpeg".
+	// MIME type of Data ("image/jpeg").
 	MIME string
 
-	// TakenAt is the capture timestamp (UTC).
+	// TakenAt is the capture timestamp in local wall-clock time — the
+	// storage layer uses it for the on-disk YYYY/MM/DD layout.
 	TakenAt time.Time
+
+	// Width and Height of the captured image in pixels.
+	Width, Height int
 }
 
 // Backend captures a picture of the current screen.
 type Backend interface {
-	// Name returns the config identifier, e.g. "portal".
+	// Name returns the config identifier, e.g. "extension".
 	Name() string
 
 	// Capture takes a full-screen screenshot and returns it as encoded
-	// bytes. It must honor ctx cancellation.
+	// JPEG bytes. It must honor ctx cancellation.
 	Capture(ctx context.Context) (*Screenshot, error)
 }
 
-// New returns the named backend. An empty name or "auto" performs
-// session-type detection.
-func New(name string) (Backend, error) {
-	switch name {
+// Options configures backends.
+type Options struct {
+	// Backend selects the implementation: auto | extension | portal |
+	// gnome-shell | x11.
+	Backend string
+
+	// DataDir is the payam-logger data directory. Temporary PNGs are
+	// written there (the extension refuses to write anywhere else).
+	DataDir string
+
+	// JPEGQuality (1-100) of re-encoded screenshots.
+	JPEGQuality int
+}
+
+// New returns the configured backend. An empty name or "auto" probes the
+// session bus and picks the best available backend.
+func New(opts Options, log *slog.Logger) (Backend, error) {
+	switch opts.Backend {
 	case "", "auto":
-		return newAuto()
+		return newAuto(opts, log)
+	case "extension":
+		return newExtension(opts)
 	case "portal":
-		return newPortal()
+		return newPortal(opts)
 	case "gnome-shell":
 		return newGnomeShell()
-	case "extension":
-		return newExtension()
 	case "x11":
 		return newX11()
 	default:
-		return nil, fmt.Errorf("unknown capture backend %q", name)
+		return nil, fmt.Errorf("unknown capture backend %q", opts.Backend)
 	}
 }
 
-// newAuto picks a backend based on the session environment.
-func newAuto() (Backend, error) {
-	switch os.Getenv("XDG_SESSION_TYPE") {
-	case "x11":
-		return newX11()
-	default:
-		// Wayland and unknown sessions: try the portal first; it is the
-		// sanctioned, compositor-independent way to capture.
-		// TODO: probe org.freedesktop.portal.Desktop availability over
-		// D-Bus and fall back to gnome-shell if the portal is missing.
-		return newPortal()
+// newAuto picks a backend based on what is available on the session bus:
+// the extension (silent) first, then the portal, then X11 tools.
+func newAuto(opts Options, log *slog.Logger) (Backend, error) {
+	conn, err := dbus.SessionBus()
+	if err != nil {
+		return nil, fmt.Errorf("connect session bus: %w", err)
 	}
+
+	if nameHasOwner(conn, "org.payam.Logger") {
+		log.Info("auto: extension backend available")
+		return newExtension(opts)
+	}
+	if nameHasOwner(conn, portalBusName) {
+		log.Info("auto: portal backend available (extension not found — install it with: make install-extension)")
+		return newPortal(opts)
+	}
+	log.Info("auto: falling back to x11 backend")
+	return newX11()
+}
+
+// nameHasOwner reports whether name is currently owned on the bus.
+func nameHasOwner(conn *dbus.Conn, name string) bool {
+	var owned bool
+	err := conn.Object("org.freedesktop.DBus", "/org/freedesktop/DBus").
+		Call("org.freedesktop.DBus.NameHasOwner", 0, name).Store(&owned)
+	return err == nil && owned
 }
