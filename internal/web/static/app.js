@@ -103,6 +103,7 @@ async function loadDay(day) {
   const res = await fetch(`/api/day/${day}`);
   if (!res.ok) { setStatus('خطا در بارگذاری روز'); return; }
   S.day = await res.json();
+  S.day.shots = S.day.screenshots; // short alias used across the app
   S.selStart = S.selEnd = -1; S.hover = -1; S.viewIdx = -1;
   autoZoom();
   $('viewer').removeAttribute('src');
