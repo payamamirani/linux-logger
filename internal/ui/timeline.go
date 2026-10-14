@@ -549,17 +549,25 @@ func (t *TimelineStack) attachControllers(w *gtk.DrawingArea, tr *track) {
 	}
 
 	// Right-click on the applications track → create an autotag rule.
+	// Anywhere on the row opens the dialog; a segment under the cursor
+	// pre-fills the patterns (with today's sparse data most of the row
+	// is white — a silent no-op there felt broken).
 	if tr != nil && tr.kind == TrackApps {
 		rc := gtk.NewGestureClick()
 		rc.SetButton(gdk.BUTTON_SECONDARY)
 		rc.ConnectPressed(func(n int, x, y float64) {
+			if t.onAddAutotag == nil {
+				return
+			}
 			sec := t.xToSec(x)
+			app, title := "", ""
 			for _, s := range tr.segs {
-				if sec >= s.Start && sec < s.End && t.onAddAutotag != nil {
-					t.onAddAutotag(s.App, s.Title)
-					return
+				if sec >= s.Start && sec < s.End {
+					app, title = s.App, s.Title
+					break
 				}
 			}
+			t.onAddAutotag(app, title)
 		})
 		w.AddController(rc)
 	}
