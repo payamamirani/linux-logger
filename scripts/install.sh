@@ -13,13 +13,9 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN_SRC="$ROOT/bin/payam-loggerd"
-UI_SRC="$ROOT/bin/payam-logger-ui"
 BIN_DST="$HOME/.local/bin/payam-loggerd"
-UI_DST="$HOME/.local/bin/payam-logger-ui"
 UNIT_SRC="$ROOT/systemd/payam-logger.service"
 UNIT_DST="$HOME/.config/systemd/user/payam-logger.service"
-DESKTOP_SRC="$ROOT/assets/payam-logger-ui.desktop"
-DESKTOP_DST="$HOME/.local/share/applications/payam-logger-ui.desktop"
 CONF_SRC="$ROOT/config/payam-logger.example.json"
 CONF_DST="$HOME/.config/payam-logger/config.json"
 
@@ -28,12 +24,6 @@ CONF_DST="$HOME/.config/payam-logger/config.json"
 echo "==> binary"
 mkdir -p "$(dirname "$BIN_DST")"
 install -m 0755 "$BIN_SRC" "$BIN_DST"
-if [ -x "$UI_SRC" ]; then
-    install -m 0755 "$UI_SRC" "$UI_DST"
-    mkdir -p "$(dirname "$DESKTOP_DST")"
-    install -m 0644 "$DESKTOP_SRC" "$DESKTOP_DST"
-    echo "    viewer installed: $UI_DST (+ desktop entry)"
-fi
 
 echo "==> systemd unit"
 mkdir -p "$(dirname "$UNIT_DST")"
