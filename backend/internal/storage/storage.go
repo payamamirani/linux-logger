@@ -11,7 +11,6 @@
 package storage
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -64,12 +63,4 @@ func (s *Store) SaveScreenshot(shot *capture.Screenshot) (string, error) {
 		return rel, fmt.Errorf("index screenshot: %w", err)
 	}
 	return rel, nil
-}
-
-// Cleanup removes screenshots older than the configured retention.
-//
-// TODO: implement together with storage.retention_days; must delete empty
-// day/month directories and the index rows of removed files.
-func (s *Store) Cleanup(_ context.Context) error {
-	return nil
 }

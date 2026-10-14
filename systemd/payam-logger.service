@@ -7,12 +7,15 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/payam-loggerd -config %h/.config/payam-logger/config.json
+# Config is picked up automatically from
+# ~/.config/payam-logger/config.json when it exists.
+ExecStart=%h/.local/bin/payam-loggerd
 Restart=on-failure
 RestartSec=5
 
-# Hardening (relaxed where session access is required)
+# Hardening (kept light: user service, needs session D-Bus and data dir)
 NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=graphical-session.target

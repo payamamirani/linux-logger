@@ -53,9 +53,18 @@ make run
 # یا با فایل تنظیمات
 backend/bin/payam-loggerd -config config/payam-logger.example.json
 
-# نصب به‌عنوان systemd user service
+# نصب کامل به‌عنوان سرویس واقعی (باینری + systemd + اکستنشن + مجوزها)
 make install-user
-journalctl --user -u payam-logger -f   # دیدن لاگ‌ها
+```
+
+### کنترل سرویس بعد از نصب
+
+```bash
+journalctl --user -u payam-logger -f        # لاگ زنده
+systemctl --user status payam-logger        # وضعیت
+systemctl --user stop payam-logger          # توقف
+systemctl --user start payam-logger         # شروع
+systemctl --user disable payam-logger       # غیرفعال‌کردن استارت خودکار
 ```
 
 ## پیش‌نیازها

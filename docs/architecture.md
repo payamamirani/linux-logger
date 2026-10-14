@@ -80,8 +80,15 @@ CREATE INDEX idx_screenshots_day ON screenshots(day);
 
 - [x] ~~پیاده‌سازی بک‌اند capture~~ — فاز ۱: `extension` (اصلی، بی‌صدا) + `portal` (fallback) + انتخاب خودکار `auto`
 - [x] ~~ایندکس SQLite + migration~~ — فاز ۲: اسکیمای v1، درج خودکار، کوئری‌های `Days` و `ScreenshotsForDay`
-- [ ] retention/cleanup خودکار (`retention_days`)
+- [x] ~~retention/cleanup خودکار (`retention_days`)~~ — فاز ۳: پاک‌سازی روزانه فایل + رکورد + پوشه‌های خالی
 - [ ] فرانتند GTK4 (تایم‌لاین روزانه، پرش بین روزها)
-- [ ] تشخیص قفل صفحه/suspend و توقف capture (اکستنشن قفل را خودش تشخیص می‌دهد؛ suspend سمت دیمن)
+- [x] ~~تشخیص قفل صفحه/suspend و توقف capture~~ — فاز ۳: چک `org.gnome.ScreenSaver` قبل از هر کپچر (اکستنشن هم خودش هنگام قفل رد می‌کند)
 - [ ] جمع‌آوری اپ/پنجره فعال (اختیاری، مثل ManicTime)
 - [ ] بسته‌بندی (`.deb` شامل دیمن + اکستنشن + systemd unit)
+
+## سرویس systemd (فاز ۳ — پیاده‌سازی‌شده)
+
+- یونیت **user service** با `WantedBy=graphical-session.target` — با لاگین شروع، با لاگ‌اوت متوقف
+- نصب کامل با `make install-user`: باینری + یونیت + کانفیگ + اکستنشن + مجوز پورتال + enable/start
+- کانفیگ به‌صورت خودکار از `~/.config/payam-logger/config.json` خوانده می‌شود (اگر موجود باشد)
+- resilience: خطای کپچر فقط لاگ می‌شود و سرویس به کار ادامه می‌دهد (`Restart=on-failure` هم روی کرش واقعی)

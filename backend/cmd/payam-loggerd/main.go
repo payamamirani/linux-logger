@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/payamam/payam-logger/backend/internal/capture"
@@ -35,6 +36,17 @@ func main() {
 }
 
 func run(configPath string) error {
+	// Default config location, used when -config is not passed: pick it up
+	// only if it exists so bare invocations still get sane defaults.
+	if configPath == "" {
+		if dir, err := os.UserConfigDir(); err == nil {
+			candidate := filepath.Join(dir, "payam-logger", "config.json")
+			if _, err := os.Stat(candidate); err == nil {
+				configPath = candidate
+			}
+		}
+	}
+
 	cfg, err := config.Load(configPath)
 	if err != nil {
 		return err
@@ -63,6 +75,7 @@ func run(configPath string) error {
 	defer stop()
 
 	d := daemon.New(&cfg, backend, store, logger)
+	defer d.Close()
 	runErr := d.Run(ctx)
 	if cerr := store.Close(); cerr != nil {
 		logger.Warn("close index db", "err", cerr)
