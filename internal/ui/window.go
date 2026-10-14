@@ -111,6 +111,7 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	w.timeline.SetMarginStart(8)
 	w.timeline.SetMarginEnd(8)
 	w.timeline.ConnectHover(w.onTimelineHover)
+	w.timeline.ConnectSelection(w.onTimelineSelection)
 
 	// --- viewer + status ---------------------------------------------------
 	w.viewer = gtk.NewPicture()
@@ -175,16 +176,7 @@ func (w *Window) showDay(day string) {
 
 	w.timeline.SetDay(day, records, time.Now())
 
-	if n := len(records); n > 0 {
-		var total int64
-		for _, r := range records {
-			total += r.SizeBytes
-		}
-		w.status.SetText(fmt.Sprintf("%s — %d screenshots • %.1f MB",
-			day, n, float64(total)/1024/1024))
-	} else {
-		w.status.SetText(fmt.Sprintf("%s — no screenshots recorded this day", day))
-	}
+	w.showDayStatus()
 }
 
 func (w *Window) shiftDay(delta int) {
@@ -226,6 +218,41 @@ func (w *Window) onTimelineHover(sec float64) {
 		w.viewer.SetPaintable(tex)
 		return false
 	})
+}
+
+// onTimelineSelection shows the selected range duration and its screenshot
+// count in the status line; a cleared selection restores the day summary.
+func (w *Window) onTimelineSelection(start, end float64) {
+	if start < 0 {
+		w.showDayStatus()
+		return
+	}
+
+	// count records inside [start, end]
+	lo := sort.Search(len(w.recSecs), func(i int) bool { return float64(w.recSecs[i]) >= start })
+	hi := sort.Search(len(w.recSecs), func(i int) bool { return float64(w.recSecs[i]) > end })
+	n := hi - lo
+
+	w.status.SetText(fmt.Sprintf("Selected %s → %s • %s • %d screenshots",
+		formatClock(start), formatClock(end), formatDuration(end-start), n))
+}
+
+func (w *Window) showDayStatus() {
+	if n := len(w.records); n > 0 {
+		var total int64
+		for _, r := range w.records {
+			total += r.SizeBytes
+		}
+		w.status.SetText(fmt.Sprintf("%s — %d screenshots • %.1f MB",
+			w.currentDay, n, float64(total)/1024/1024))
+	} else {
+		w.status.SetText(fmt.Sprintf("%s — no screenshots recorded this day", w.currentDay))
+	}
+}
+
+// formatClock renders seconds-of-day as HH:MM.
+func formatClock(sec float64) string {
+	return fmt.Sprintf("%02d:%02d", int(sec)/3600, int(sec)%3600/60)
 }
 
 // recordAt returns the index of the last record at or before sec; valid is
