@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"hash/fnv"
 	"math"
 	"time"
 
@@ -20,48 +21,101 @@ const (
 	minViewSec     = 3600      // max zoom-in: 1 hour
 	maxViewSec     = daySeconds
 
-	timelineHeight = 72
-	snapRadiusPx   = 8.0 // sticky-selection snap radius in pixels
+	autoZoomPad  = 30 * 60 // padding around the data span on auto-zoom
+	snapRadiusPx = 8.0     // sticky-selection snap radius in pixels
+	snapMinutes  = 1       // free-selection granularity (whole minutes)
+
+	rulerH      = 18
+	trackShotsH = 34
+	trackUsageH = 22
+	trackAppsH  = 28
 )
 
 // Colors (RGB 0..1).
 var (
-	colBlue   = [3]float64{0.208, 0.518, 0.894} // #3584e4 — screenshots
 	colGrid   = [3]float64{0.835, 0.816, 0.784} // #d5d0cc — hour grid
 	colText   = [3]float64{0.467, 0.443, 0.400} // #77767b — hour labels
 	colHover  = [3]float64{0.149, 0.635, 0.412} // #26a269 — hover (green)
 	colNow    = [3]float64{0.878, 0.106, 0.142} // #e01b24 — now (red)
 	colBorder = [3]float64{0.922, 0.914, 0.898} // #ebeae4
 	colChip   = [3]float64{0.227, 0.223, 0.212} // #3a3a38 — chip background
+
+	colActive = [3]float64{0.149, 0.635, 0.412} // green — active time
+	colAway   = [3]float64{0.878, 0.106, 0.142} // red — away time
 )
 
-// chipBGAlpha / chipFillAlpha for translucent overlays.
-const chipFillAlpha = 0.16
+// appPalette holds distinct, calm colors for the Applications track.
+var appPalette = [][3]float64{
+	{0.208, 0.518, 0.894}, // blue
+	{0.612, 0.400, 0.749}, // purple
+	{0.827, 0.427, 0.129}, // orange
+	{0.145, 0.631, 0.506}, // teal
+	{0.757, 0.290, 0.529}, // magenta
+	{0.588, 0.545, 0.224}, // olive
+	{0.169, 0.533, 0.702}, // steel blue
+	{0.831, 0.298, 0.290}, // brick
+	{0.400, 0.522, 0.302}, // moss
+	{0.553, 0.396, 0.663}, // violet
+}
 
-// Timeline is a custom drawing widget showing one day (00:00–24:00) with a
-// zoomable view window. Buckets — one per capture interval — are drawn blue
-// when a screenshot exists in them and left white otherwise (locked screen /
-// service gaps).
+// appColor returns a stable color for an application name.
+func appColor(app string) [3]float64 {
+	h := fnv.New32a()
+	h.Write([]byte(app))
+	return appPalette[h.Sum32()%uint32(len(appPalette))]
+}
+
+// Seg is one time segment on the usage or applications track (seconds of
+// day, end exclusive).
+type Seg struct {
+	Start, End float64
+	App        string // applications track
+	Title      string
+	State      string // computer usage track: active|away
+}
+
+// TrackKind identifies a timeline row.
+type TrackKind int
+
+const (
+	TrackScreenshots TrackKind = iota
+	TrackUsage
+	TrackApps
+)
+
+// track is one row of the stack.
+type track struct {
+	kind  TrackKind
+	da    *gtk.DrawingArea
+	label *gtk.Label
+	name  string
+	has   []bool // screenshots track: bucket → present
+	segs  []Seg  // usage/apps tracks
+}
+
+// TimelineStack is the ManicTime-style stacked day timeline: a shared time
+// ruler on top, then the Screenshots, Computer usage and Applications rows.
+// Zoom/pan/selection/hover state is shared across all rows.
 //
 // Interaction:
-//   - hover         → green position line + time; reports the second under
-//     the cursor (onHover)
-//   - left drag     → range selection: starts exactly at the press point
-//     (each new drag replaces the previous selection); the moving end edge
-//     is sticky — it snaps to screenshot-run boundaries while close, and
-//     pulling harder than snapRadiusPx breaks free. Reports (start,end)
-//     seconds, or (-1,-1) when cleared.
-//   - middle drag / horizontal scroll → pan
-//   - vertical scroll / +− buttons → zoom (1h..24h)
-type Timeline struct {
-	*gtk.DrawingArea
+//   - hover         → green position line + time chip; reports the second
+//     under the cursor (onHover)
+//   - left drag     → range selection; edges stick to nearby segment
+//     boundaries of ANY track, otherwise snap to whole minutes; each new
+//     drag replaces the previous selection
+//   - double-click  → select the whole run/segment under the cursor
+//   - simple click  → clear selection and activate the clicked track
+//   - middle drag / horizontal scroll → pan; vertical scroll → zoom
+type TimelineStack struct {
+	*gtk.Box
+
+	labelCol *gtk.Box
+	ruler    *gtk.DrawingArea
+	tracks   []*track
+	active   int
 
 	intervalSec int
 	nBuckets    int
-
-	has     []bool    // bucket → screenshot present
-	secs    []int     // record times-of-day, sorted
-	snapPts []float64 // sticky snap points (run boundaries), sorted
 
 	// visible window, seconds of day
 	viewStart float64
@@ -77,34 +131,292 @@ type Timeline struct {
 
 	onHover     func(sec float64)
 	onSelection func(start, end float64)
+	onTrack     func(kind TrackKind)
 
 	// pan drag state
 	panning      bool
-	panStartX    float64
 	panStartView float64
 
-	// "now" marker (only when the shown day is today)
+	// click-vs-drag discrimination for the selection gesture
+	pressX, pressY float64
+
 	isToday bool
 	nowSec  float64
 }
 
-// NewTimeline creates the widget for the given capture interval.
-func NewTimeline(intervalSec int) *Timeline {
-	t := &Timeline{
-		DrawingArea: gtk.NewDrawingArea(),
+// NewTimelineStack creates the widget for the given capture interval.
+func NewTimelineStack(intervalSec int) *TimelineStack {
+	t := &TimelineStack{
+		Box:         gtk.NewBox(gtk.OrientationHorizontal, 4),
 		intervalSec: intervalSec,
 		nBuckets:    daySeconds / intervalSec,
 		viewStart:   defaultStart,
 		viewSpan:    defaultViewSec,
 		hover:       -1,
 		selStart:    -1,
+		active:      int(TrackApps),
 	}
 
-	t.SetHExpand(true)
-	t.SetSizeRequest(-1, timelineHeight)
-	t.SetDrawFunc(t.draw)
+	t.labelCol = gtk.NewBox(gtk.OrientationVertical, 0)
+	t.Append(t.labelCol)
 
-	// --- hover ---------------------------------------------------------
+	rows := gtk.NewBox(gtk.OrientationVertical, 2)
+	t.Append(rows)
+
+	// Ruler
+	t.ruler = gtk.NewDrawingArea()
+	t.ruler.SetHExpand(true)
+	t.ruler.SetSizeRequest(-1, rulerH)
+	t.ruler.SetDrawFunc(t.drawRuler)
+	rows.Append(t.ruler)
+
+	// Track rows
+	for _, spec := range []struct {
+		kind TrackKind
+		name string
+		h    int
+	}{
+		{TrackScreenshots, "Screenshots", trackShotsH},
+		{TrackUsage, "Usage", trackUsageH},
+		{TrackApps, "Applications", trackAppsH},
+	} {
+		tr := &track{kind: spec.kind, has: make([]bool, t.nBuckets)}
+		tr.da = gtk.NewDrawingArea()
+		tr.da.SetHExpand(true)
+		tr.da.SetSizeRequest(-1, spec.h)
+		tr.da.SetDrawFunc(func(_ *gtk.DrawingArea, cr *cairo.Context, w, h int) {
+			t.drawTrack(tr, cr, w, h)
+		})
+		t.attachControllers(tr.da, tr)
+		t.tracks = append(t.tracks, tr)
+		rows.Append(tr.da)
+
+		lbl := gtk.NewLabel(spec.name)
+		lbl.SetHAlign(gtk.AlignStart)
+		lbl.SetSizeRequest(84, spec.h)
+		lbl.SetVAlign(gtk.AlignCenter)
+		t.labelCol.Append(lbl)
+		tr.label = lbl
+		tr.name = spec.name
+	}
+
+	t.restyleLabels()
+
+	// Ruler interactions (hover/pan/zoom without selecting).
+	t.attachRulerControllers(t.ruler)
+
+	return t
+}
+
+// restyleLabels bolds the active track's label.
+func (t *TimelineStack) restyleLabels() {
+	for i, tr := range t.tracks {
+		if i == t.active {
+			tr.label.SetMarkup(fmt.Sprintf("<b>%s</b>", tr.name))
+		} else {
+			tr.label.SetText(tr.name)
+		}
+	}
+}
+
+// ConnectHover registers the hover callback; sec is the second-of-day under
+// the cursor, or -1 when the pointer left the widget.
+func (t *TimelineStack) ConnectHover(fn func(sec float64)) { t.onHover = fn }
+
+// ConnectSelection registers the selection callback: start/end in
+// seconds-of-day (ordered), or (-1,-1) once the selection is cleared.
+func (t *TimelineStack) ConnectSelection(fn func(start, end float64)) { t.onSelection = fn }
+
+// ConnectTrack fires when the active track changes (click on a row).
+func (t *TimelineStack) ConnectTrack(fn func(kind TrackKind)) { t.onTrack = fn }
+
+// ActiveTrack returns the currently selected track kind.
+func (t *TimelineStack) ActiveTrack() TrackKind { return t.tracks[t.active].kind }
+
+// SetActiveTrack highlights a track (e.g. from panel interactions).
+func (t *TimelineStack) SetActiveTrack(kind TrackKind) {
+	for i, tr := range t.tracks {
+		if tr.kind == kind {
+			t.active = i
+		}
+	}
+	t.restyleLabels()
+}
+
+// ClearSelection removes the current selection.
+func (t *TimelineStack) ClearSelection() {
+	t.selStart, t.selEnd = -1, -1
+	t.QueueDraw()
+	t.emitSelection()
+}
+
+// SetSelection selects a range programmatically (details panel rows).
+func (t *TimelineStack) SetSelection(start, end float64) {
+	t.selStart, t.selEnd = start, end
+	t.QueueDraw()
+	t.emitSelection()
+}
+
+// SetDay loads one day's data and auto-zooms to its data span (ManicTime
+// behavior); an empty day falls back to the default 08:00–18:00 window.
+func (t *TimelineStack) SetDay(day string, records []storage.Record, appSegs, usageSegs []Seg, now time.Time) {
+	shots := t.tracks[int(TrackScreenshots)]
+	shots.has = make([]bool, t.nBuckets)
+	for _, r := range records {
+		ts, err := time.Parse(time.RFC3339, r.TakenAt)
+		if err != nil {
+			continue
+		}
+		sec := ts.Hour()*3600 + ts.Minute()*60 + ts.Second()
+		if b := sec / t.intervalSec; b >= 0 && b < t.nBuckets {
+			shots.has[b] = true
+		}
+	}
+	t.tracks[int(TrackUsage)].segs = usageSegs
+	t.tracks[int(TrackApps)].segs = appSegs
+
+	if day == now.Format("2006-01-02") {
+		t.isToday = true
+		t.nowSec = float64(now.Hour()*3600 + now.Minute()*60 + now.Second())
+	} else {
+		t.isToday = false
+	}
+
+	t.viewStart, t.viewSpan = t.dataSpanOrDefault()
+	t.selStart, t.selEnd = -1, -1
+	t.hover = -1
+	t.QueueDraw()
+	t.emitSelection()
+}
+
+// dataSpanOrDefault computes the auto-zoom window from all tracks' data.
+func (t *TimelineStack) dataSpanOrDefault() (float64, float64) {
+	lo, hi := math.MaxFloat64, -math.MaxFloat64
+	consider := func(s, e float64) {
+		if e > s {
+			lo = math.Min(lo, s)
+			hi = math.Max(hi, e)
+		}
+	}
+	shots := t.tracks[int(TrackScreenshots)]
+	for b, ok := range shots.has {
+		if ok {
+			consider(float64(b)*float64(t.intervalSec), float64(b+1)*float64(t.intervalSec))
+		}
+	}
+	for _, tr := range t.tracks {
+		for _, s := range tr.segs {
+			consider(s.Start, s.End)
+		}
+	}
+	if hi < lo {
+		return defaultStart, defaultViewSec
+	}
+	lo = math.Max(0, lo-autoZoomPad)
+	hi = math.Min(daySeconds, hi+autoZoomPad)
+	if hi-lo < minViewSec {
+		mid := (lo + hi) / 2
+		lo, hi = mid-minViewSec/2, mid+minViewSec/2
+	}
+	return lo, hi - lo
+}
+
+// ZoomIn / ZoomOut change the visible window around its center.
+func (t *TimelineStack) ZoomIn()  { t.zoomAt(float64(t.width())/2, -1) }
+func (t *TimelineStack) ZoomOut() { t.zoomAt(float64(t.width())/2, +1) }
+
+// --- internal --------------------------------------------------------------
+
+func (t *TimelineStack) width() int {
+	for _, tr := range t.tracks {
+		if w := tr.da.Width(); w > 0 {
+			return w
+		}
+	}
+	return t.ruler.Width()
+}
+
+func (t *TimelineStack) pxPerSec() float64 {
+	w := float64(t.width() - 12)
+	if w <= 0 {
+		return 1
+	}
+	return w / t.viewSpan
+}
+
+func (t *TimelineStack) setViewStart(s float64) {
+	maxStart := float64(daySeconds) - t.viewSpan
+	if maxStart < 0 {
+		maxStart = 0
+	}
+	t.viewStart = math.Max(0, math.Min(s, maxStart))
+	t.QueueDraw()
+}
+
+func (t *TimelineStack) xToSec(x float64) float64 {
+	w := float64(t.width())
+	if w <= 0 {
+		return t.viewStart
+	}
+	sec := t.viewStart + x/w*t.viewSpan
+	return math.Max(t.viewStart, math.Min(sec, t.viewStart+t.viewSpan))
+}
+
+// zoomAt zooms around the given x anchor; dy>0 zooms out, dy<0 zooms in.
+func (t *TimelineStack) zoomAt(x, dy float64) {
+	const factorPerTick = 1.25
+	factor := math.Pow(factorPerTick, dy)
+
+	newSpan := math.Max(minViewSec, math.Min(maxViewSec, t.viewSpan*factor))
+	anchor := t.xToSec(x)
+
+	rel := (anchor - t.viewStart) / t.viewSpan
+	newStart := anchor - rel*newSpan
+
+	t.viewSpan = newSpan
+	t.setViewStart(newStart)
+}
+
+// snap returns the sticky/snapped second for a raw position: nearest
+// segment boundary of any track within the radius, else the whole minute.
+func (t *TimelineStack) snap(sec float64) float64 {
+	radius := snapRadiusPx / t.pxPerSec()
+	best, bestDist := sec, math.MaxFloat64
+	for _, tr := range t.tracks {
+		for _, s := range tr.segs {
+			for _, p := range []float64{s.Start, s.End} {
+				if d := math.Abs(sec - p); d < bestDist {
+					best, bestDist = p, d
+				}
+			}
+		}
+	}
+	// Screenshot bucket edges are minute-aligned already (1-min interval).
+	if bestDist <= radius {
+		return best
+	}
+	gran := float64(snapMinutes * 60)
+	return math.Round(sec/gran) * gran
+}
+
+func (t *TimelineStack) emitSelection() {
+	if t.onSelection == nil {
+		return
+	}
+	if t.selStart < 0 {
+		t.onSelection(-1, -1)
+		return
+	}
+	lo, hi := t.selStart, t.selEnd
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	t.onSelection(lo, hi)
+}
+
+// --- controllers ------------------------------------------------------------
+
+func (t *TimelineStack) attachControllers(w *gtk.DrawingArea, tr *track) {
 	motion := gtk.NewEventControllerMotion()
 	motion.ConnectMotion(func(x, y float64) {
 		t.hoverX, t.hover = x, t.xToSec(x)
@@ -120,29 +432,24 @@ func NewTimeline(intervalSec int) *Timeline {
 			t.onHover(-1)
 		}
 	})
-	t.AddController(motion)
+	w.AddController(motion)
 
-	// --- zoom + pan via scroll ------------------------------------------
 	scroll := gtk.NewEventControllerScroll(gtk.EventControllerScrollBothAxes)
 	scroll.ConnectScroll(func(dx, dy float64) bool {
 		switch {
 		case math.Abs(dx) > math.Abs(dy):
-			t.panBy(dx)
+			t.setViewStart(t.viewStart + dx/t.pxPerSec())
 		default:
 			t.zoomAt(t.hoverX, dy)
 		}
 		return true
 	})
-	t.AddController(scroll)
+	w.AddController(scroll)
 
-	// --- selection: left drag ---------------------------------------------
-	// Start = exactly where the pointer presses (no snapping, so every new
-	// drag genuinely replaces the previous selection); the moving end edge
-	// keeps the sticky magnet to screenshot-run boundaries.
 	sel := gtk.NewGestureDrag()
 	sel.ConnectDragBegin(func(x, y float64) {
-		t.selPressX = x
-		start := t.xToSec(x)
+		t.selPressX, t.pressX, t.pressY = x, x, y
+		start := t.snap(t.xToSec(x))
 		t.selStart, t.selEnd = start, start
 		t.QueueDraw()
 		t.emitSelection()
@@ -151,236 +458,97 @@ func NewTimeline(intervalSec int) *Timeline {
 		if t.selStart < 0 {
 			return
 		}
-		end, _ := t.snap(t.xToSec(t.selPressX + offsetX))
-		t.selEnd = end
+		t.selEnd = t.snap(t.xToSec(t.selPressX + offsetX))
 		t.QueueDraw()
 		t.emitSelection()
 	})
 	sel.ConnectDragEnd(func(x, y float64) {
-		// A "drag" that never really moved is a click → clear selection.
 		if math.Abs(t.selEnd-t.selStart)*t.pxPerSec() < 4 {
-			t.ClearSelection()
+			t.ClearSelection() // it was a click
 		}
 	})
-	t.AddController(sel)
+	w.AddController(sel)
 
-	// --- pan: middle drag ---------------------------------------------------
-	pan := gtk.NewGestureDrag()
-	pan.SetButton(gdk.BUTTON_MIDDLE)
-	pan.ConnectDragBegin(func(x, y float64) {
-		t.panning, t.panStartX, t.panStartView = true, x, t.viewStart
-	})
-	pan.ConnectDragUpdate(func(offsetX, offsetY float64) {
-		if !t.panning {
+	click := gtk.NewGestureClick()
+	click.ConnectPressed(func(n int, x, y float64) {
+		if n >= 2 { // double-click → select the whole segment under the cursor
+			t.selectRunAt(x)
 			return
 		}
-		t.setViewStart(t.panStartView - offsetX/t.pxPerSec())
+		if tr != nil { // single click also activates this track
+			t.active = -1
+			for i := range t.tracks {
+				if t.tracks[i] == tr {
+					t.active = i
+				}
+			}
+			if t.active >= 0 {
+				t.restyleLabels()
+				if t.onTrack != nil {
+					t.onTrack(tr.kind)
+				}
+			}
+		}
+	})
+	w.AddController(click)
+
+	pan := gtk.NewGestureDrag()
+	pan.SetButton(gdk.BUTTON_MIDDLE)
+	pan.ConnectDragBegin(func(x, y float64) { t.panning, t.panStartView = true, t.viewStart })
+	pan.ConnectDragUpdate(func(offsetX, offsetY float64) {
+		if t.panning {
+			t.setViewStart(t.panStartView - offsetX/t.pxPerSec())
+		}
 	})
 	pan.ConnectDragEnd(func(x, y float64) { t.panning = false })
-	t.AddController(pan)
-
-	return t
+	w.AddController(pan)
 }
 
-// ConnectHover registers the hover callback; sec is the second-of-day under
-// the cursor, or -1 when the pointer left the widget.
-func (t *Timeline) ConnectHover(fn func(sec float64)) { t.onHover = fn }
-
-// ConnectSelection registers the selection callback: start/end in
-// seconds-of-day (ordered), or (-1,-1) once the selection is cleared.
-func (t *Timeline) ConnectSelection(fn func(start, end float64)) { t.onSelection = fn }
-
-// ClearSelection removes the current selection.
-func (t *Timeline) ClearSelection() {
-	t.selStart, t.selEnd = -1, -1
-	t.QueueDraw()
-	t.emitSelection()
+func (t *TimelineStack) attachRulerControllers(w *gtk.DrawingArea) {
+	t.attachControllers(w, nil)
 }
 
-// SetDay loads one day's records and resets the view to the default window.
-// day is the shown date (YYYY-MM-DD); the "now" marker is drawn when it
-// equals today.
-func (t *Timeline) SetDay(day string, records []storage.Record, now time.Time) {
-	t.has = make([]bool, t.nBuckets)
-	t.secs = t.secs[:0]
-	for _, r := range records {
-		ts, err := time.Parse(time.RFC3339, r.TakenAt)
-		if err != nil {
-			continue
+// selectRunAt double-click handler: select the run covering x. Runs come
+// from the active track (screenshots: contiguous blue buckets).
+func (t *TimelineStack) selectRunAt(x float64) {
+	sec := t.xToSec(x)
+
+	tr := t.tracks[t.active]
+	switch tr.kind {
+	case TrackScreenshots:
+		b := int(sec / float64(t.intervalSec))
+		if b < 0 || b >= t.nBuckets || !tr.has[b] {
+			return
 		}
-		sec := ts.Hour()*3600 + ts.Minute()*60 + ts.Second()
-		t.secs = append(t.secs, sec)
-		if b := sec / t.intervalSec; b >= 0 && b < t.nBuckets {
-			t.has[b] = true
+		lo, hi := b, b
+		for lo-1 >= 0 && tr.has[lo-1] {
+			lo--
+		}
+		for hi+1 < t.nBuckets && tr.has[hi+1] {
+			hi++
+		}
+		t.SetSelection(float64(lo)*float64(t.intervalSec), float64(hi+1)*float64(t.intervalSec))
+	default:
+		for _, s := range tr.segs {
+			if sec >= s.Start && sec < s.End {
+				t.SetSelection(s.Start, s.End)
+				return
+			}
 		}
 	}
-	t.buildSnapPoints()
-
-	if day == now.Format("2006-01-02") {
-		t.isToday = true
-		t.nowSec = float64(now.Hour()*3600 + now.Minute()*60 + now.Second())
-	} else {
-		t.isToday = false
-	}
-
-	t.viewStart, t.viewSpan = defaultStart, defaultViewSec
-	t.selStart, t.selEnd = -1, -1
-	t.hover = -1
-	t.QueueDraw()
-	t.emitSelection()
-}
-
-// ZoomIn / ZoomOut change the visible window around its center.
-func (t *Timeline) ZoomIn()  { t.zoomAt(float64(t.Width())/2, -1) }
-func (t *Timeline) ZoomOut() { t.zoomAt(float64(t.Width())/2, +1) }
-
-// --- internal --------------------------------------------------------------
-
-// buildSnapPoints collects screenshot-run boundaries — the sticky targets.
-func (t *Timeline) buildSnapPoints() {
-	t.snapPts = t.snapPts[:0]
-	for b := 0; b < t.nBuckets; {
-		if !t.has[b] {
-			b++
-			continue
-		}
-		end := b
-		for end+1 < t.nBuckets && t.has[end+1] {
-			end++
-		}
-		t.snapPts = append(t.snapPts,
-			float64(b)*float64(t.intervalSec),     // run start
-			float64(end+1)*float64(t.intervalSec)) // run end
-		b = end + 1
-	}
-}
-
-// snap returns the nearest sticky point within the snap radius, or the raw
-// second when the pointer pulled harder than the stickiness.
-func (t *Timeline) snap(sec float64) (float64, bool) {
-	if len(t.snapPts) == 0 {
-		return sec, false
-	}
-	radius := snapRadiusPx / t.pxPerSec()
-
-	best, bestDist := sec, math.MaxFloat64
-	for _, p := range t.snapPts {
-		if d := math.Abs(sec - p); d < bestDist {
-			best, bestDist = p, d
-		}
-	}
-	if bestDist <= radius {
-		return best, true
-	}
-	return sec, false
-}
-
-func (t *Timeline) pxPerSec() float64 {
-	w := float64(t.Width() - 12)
-	if w <= 0 {
-		return 1
-	}
-	return w / t.viewSpan
-}
-
-func (t *Timeline) panBy(dxCursor float64) {
-	t.setViewStart(t.viewStart + dxCursor/t.pxPerSec())
-}
-
-func (t *Timeline) setViewStart(s float64) {
-	maxStart := float64(daySeconds) - t.viewSpan
-	if maxStart < 0 {
-		maxStart = 0
-	}
-	t.viewStart = math.Max(0, math.Min(s, maxStart))
-	t.QueueDraw()
-}
-
-func (t *Timeline) xToSec(x float64) float64 {
-	w := float64(t.Width())
-	if w <= 0 {
-		return t.viewStart
-	}
-	sec := t.viewStart + x/w*t.viewSpan
-	return math.Max(t.viewStart, math.Min(sec, t.viewStart+t.viewSpan))
-}
-
-// zoomAt zooms around the given x anchor; dy>0 zooms out, dy<0 zooms in.
-func (t *Timeline) zoomAt(x, dy float64) {
-	const factorPerTick = 1.25
-	factor := math.Pow(factorPerTick, dy)
-
-	newSpan := math.Max(minViewSec, math.Min(maxViewSec, t.viewSpan*factor))
-	anchor := t.xToSec(x)
-
-	rel := (anchor - t.viewStart) / t.viewSpan
-	newStart := anchor - rel*newSpan
-
-	t.viewSpan = newSpan
-	t.setViewStart(newStart)
-}
-
-func (t *Timeline) emitSelection() {
-	if t.onSelection == nil {
-		return
-	}
-	if t.selStart < 0 {
-		t.onSelection(-1, -1)
-		return
-	}
-	lo, hi := t.selStart, t.selEnd
-	if lo > hi {
-		lo, hi = hi, lo
-	}
-	t.onSelection(lo, hi)
 }
 
 // --- drawing ----------------------------------------------------------------
 
-func (t *Timeline) draw(_ *gtk.DrawingArea, cr *cairo.Context, width, height int) {
+func (t *TimelineStack) drawRuler(_ *gtk.DrawingArea, cr *cairo.Context, width, height int) {
 	const padX = 6.0
-	const padTop = 6.0
-	const labelH = 18.0
-
 	stripW := float64(width) - 2*padX
-	stripH := float64(height) - padTop - labelH
-	stripY := padTop
-	if stripW <= 0 || stripH <= 0 {
+	if stripW <= 0 {
 		return
 	}
 	pxPerSec := stripW / t.viewSpan
-
 	secToX := func(sec float64) float64 { return padX + (sec-t.viewStart)*pxPerSec }
 
-	// --- strip background (white = no screenshot / locked) -----------------
-	cairoSetRGB(cr, [3]float64{1, 1, 1})
-	cr.Rectangle(padX, stripY, stripW, stripH)
-	cr.Fill()
-
-	// --- blue screenshot runs ----------------------------------------------
-	cairoSetRGB(cr, colBlue)
-	b0 := int(math.Max(0, math.Floor(t.viewStart/float64(t.intervalSec))))
-	b1 := int(math.Min(float64(t.nBuckets-1), math.Floor((t.viewStart+t.viewSpan)/float64(t.intervalSec))))
-	for b := b0; b <= b1; {
-		if !t.has[b] {
-			b++
-			continue
-		}
-		end := b
-		for end+1 <= b1 && t.has[end+1] {
-			end++
-		}
-		x0 := secToX(float64(b) * float64(t.intervalSec))
-		x1 := secToX(float64(end+1) * float64(t.intervalSec))
-		if x1-x0 < 1 { // never fully invisible
-			x1 = x0 + 1
-		}
-		cr.Rectangle(x0, stripY, x1-x0, stripH)
-		cr.Fill()
-		b = end + 1
-	}
-
-	// --- hour grid + labels --------------------------------------------------
 	labelSteps := []float64{1800, 3600, 7200, 10800, 21600, 43200}
 	step := labelSteps[len(labelSteps)-1]
 	for _, s := range labelSteps {
@@ -399,16 +567,96 @@ func (t *Timeline) draw(_ *gtk.DrawingArea, cr *cairo.Context, width, height int
 		}
 		cairoSetRGB(cr, colGrid)
 		cr.SetLineWidth(1)
-		cr.MoveTo(x, stripY)
-		cr.LineTo(x, stripY+stripH)
+		cr.MoveTo(x, 3)
+		cr.LineTo(x, float64(height))
 		cr.Stroke()
 
 		cairoSetRGB(cr, colText)
-		cr.MoveTo(x+3, stripY+stripH+13)
+		cr.MoveTo(x+3, 12)
 		cr.ShowText(fmt.Sprintf("%02d:%02d", int(sec/3600)%24, int(sec)%3600/60))
 	}
+}
 
-	// --- selection overlay -----------------------------------------------------
+func (t *TimelineStack) drawTrack(tr *track, cr *cairo.Context, width, height int) {
+	const padX = 6.0
+	stripW := float64(width) - 2*padX
+	if stripW <= 0 {
+		return
+	}
+	pxPerSec := stripW / t.viewSpan
+	secToX := func(sec float64) float64 { return padX + (sec-t.viewStart)*pxPerSec }
+
+	// background
+	cairoSetRGB(cr, [3]float64{1, 1, 1})
+	cr.Rectangle(padX, 0, stripW, float64(height))
+	cr.Fill()
+
+	switch tr.kind {
+	case TrackScreenshots:
+		cairoSetRGB(cr, [3]float64{0.208, 0.518, 0.894}) // blue
+		b0 := int(math.Max(0, math.Floor(t.viewStart/float64(t.intervalSec))))
+		b1 := int(math.Min(float64(t.nBuckets-1), math.Floor((t.viewStart+t.viewSpan)/float64(t.intervalSec))))
+		for b := b0; b <= b1; {
+			if !tr.has[b] {
+				b++
+				continue
+			}
+			end := b
+			for end+1 <= b1 && tr.has[end+1] {
+				end++
+			}
+			x0 := secToX(float64(b) * float64(t.intervalSec))
+			x1 := secToX(float64(end+1) * float64(t.intervalSec))
+			if x1-x0 < 1 {
+				x1 = x0 + 1
+			}
+			cr.Rectangle(x0, 2, x1-x0, float64(height)-4)
+			cr.Fill()
+			b = end + 1
+		}
+
+	case TrackUsage:
+		for _, s := range tr.segs {
+			x0, x1 := secToX(s.Start), secToX(s.End)
+			if x1 < padX || x0 > padX+stripW {
+				continue
+			}
+			if s.State == "away" {
+				cairoSetRGB(cr, colAway)
+			} else {
+				cairoSetRGB(cr, colActive)
+			}
+			cr.Rectangle(math.Max(x0, padX), 2, math.Min(x1, padX+stripW)-math.Max(x0, padX), float64(height)-4)
+			cr.Fill()
+		}
+
+	case TrackApps:
+		cr.SetFontSize(10)
+		for _, s := range tr.segs {
+			x0, x1 := secToX(s.Start), secToX(s.End)
+			if x1 < padX || x0 > padX+stripW {
+				continue
+			}
+			cx0, cx1 := math.Max(x0, padX), math.Min(x1, padX+stripW)
+			cairoSetRGB(cr, appColor(s.App))
+			cr.Rectangle(cx0, 2, cx1-cx0, float64(height)-4)
+			cr.Fill()
+
+			// label when the segment is wide enough
+			if cx1-cx0 > 40 {
+				label := s.App
+				if label == "" {
+					label = "(desktop)"
+				}
+				cr.SetSourceRGB(1, 1, 1)
+				cr.MoveTo(cx0+4, float64(height)/2+3.5)
+				maxw := int(cx1 - cx0 - 8)
+				cr.ShowText(clipText(cr, label, maxw))
+			}
+		}
+	}
+
+	// selection overlay
 	if t.selStart >= 0 {
 		lo, hi := t.selStart, t.selEnd
 		if lo > hi {
@@ -416,80 +664,59 @@ func (t *Timeline) draw(_ *gtk.DrawingArea, cr *cairo.Context, width, height int
 		}
 		x0, x1 := math.Max(padX, secToX(lo)), math.Min(padX+stripW, secToX(hi))
 		if x1 > x0 {
-			cr.SetSourceRGBA(0.2, 0.2, 0.2, chipFillAlpha)
-			cr.Rectangle(x0, stripY, x1-x0, stripH)
+			cr.SetSourceRGBA(0.2, 0.2, 0.2, 0.16)
+			cr.Rectangle(x0, 0, x1-x0, float64(height))
 			cr.Fill()
-
 			cairoSetRGB(cr, colChip)
 			cr.SetLineWidth(2)
-			cr.MoveTo(x0, stripY)
-			cr.LineTo(x0, stripY+stripH)
-			cr.MoveTo(x1, stripY)
-			cr.LineTo(x1, stripY+stripH)
+			cr.MoveTo(x0, 0)
+			cr.LineTo(x0, float64(height))
+			cr.MoveTo(x1, 0)
+			cr.LineTo(x1, float64(height))
 			cr.Stroke()
-
-			// duration chip below the strip, centered on the selection
-			label := formatDuration(hi - lo)
-			cr.SetFontSize(10)
-			tw := textWidth(cr, label)
-			cx := math.Min(math.Max((x0+x1)/2-tw/2, padX), padX+stripW-tw)
-			drawChip(cr, cx, stripY+stripH+1, tw+10, 15, label)
 		}
 	}
 
-	// --- "now" marker (today only) — red, on top of everything ----------------
+	// "now" marker
 	if t.isToday && t.nowSec >= t.viewStart && t.nowSec <= t.viewStart+t.viewSpan {
 		x := secToX(t.nowSec)
 		cairoSetRGB(cr, colNow)
 		cr.SetLineWidth(2.5)
-		cr.MoveTo(x, stripY)
-		cr.LineTo(x, stripY+stripH)
+		cr.MoveTo(x, 0)
+		cr.LineTo(x, float64(height))
 		cr.Stroke()
 	}
 
-	// --- border ------------------------------------------------------------------
+	// border
 	cairoSetRGB(cr, colBorder)
 	cr.SetLineWidth(1)
-	cr.Rectangle(padX, stripY, stripW, stripH)
+	cr.Rectangle(padX, 0, stripW, float64(height))
 	cr.Stroke()
 
-	// --- hover indicator (green) ---------------------------------------------------
+	// hover indicator
 	if t.hover >= 0 {
 		x := secToX(t.hover)
-
 		cairoSetRGB(cr, colHover)
 		cr.SetLineWidth(1.5)
-		cr.MoveTo(x, stripY)
-		cr.LineTo(x, stripY+stripH)
+		cr.MoveTo(x, 0)
+		cr.LineTo(x, float64(height))
 		cr.Stroke()
-
-		// time chip below the strip (in the label row, above any hour label)
-		label := fmt.Sprintf("%02d:%02d", int(t.hover/3600), int(t.hover)%3600/60)
-		cr.SetFontSize(10)
-		tw := textWidth(cr, label)
-		cx := math.Min(math.Max(x-tw/2, padX), padX+stripW-tw)
-		drawChipColored(cr, cx, stripY+stripH+1, tw+10, 15, label, colHover)
 	}
 }
 
-// drawChip paints a dark rounded chip with white text.
-func drawChip(cr *cairo.Context, x, y, w, h float64, label string) {
-	drawChipColored(cr, x, y, w, h, label, colChip)
-}
-
-func drawChipColored(cr *cairo.Context, x, y, w, h float64, label string, c [3]float64) {
-	cairoSetRGB(cr, c)
-	cr.Rectangle(x, y, w, h)
-	cr.Fill()
-	cr.SetSourceRGB(1, 1, 1)
-	cr.MoveTo(x+5, y+11)
-	cr.ShowText(label)
-}
-
-// textWidth approximates the rendered width of s at the current font size.
-func textWidth(cr *cairo.Context, s string) float64 {
-	e := cr.TextExtents(s)
-	return e.XAdvance
+// clipText truncates s with an ellipsis so its rendered width fits maxw.
+func clipText(cr *cairo.Context, s string, maxw int) string {
+	if int(cr.TextExtents(s).XAdvance) <= maxw {
+		return s
+	}
+	runes := []rune(s)
+	for len(runes) > 1 {
+		runes = runes[:len(runes)-1]
+		if int(cr.TextExtents(string(runes)+"…").XAdvance) <= maxw {
+			return string(runes) + "…"
+		}
+	}
+	return "…"
 }
 
 // formatDuration renders a duration as "2h 13m", "45m" or "1h".
@@ -511,4 +738,9 @@ func formatDuration(sec float64) string {
 
 func cairoSetRGB(cr *cairo.Context, c [3]float64) {
 	cr.SetSourceRGB(c[0], c[1], c[2])
+}
+
+// formatClock renders seconds-of-day as HH:MM.
+func formatClock(sec float64) string {
+	return fmt.Sprintf("%02d:%02d", int(sec)/3600, int(sec)%3600/60)
 }

@@ -99,17 +99,6 @@ func (d *Daemon) Run(ctx context.Context) error {
 		}()
 	}
 
-	if d.collector != nil {
-		d.wg.Add(1)
-		go func() {
-			defer d.wg.Done()
-			if err := d.collector.Run(ctx); err != nil &&
-				!errors.Is(err, context.Canceled) {
-				d.log.Error("activity collector failed", "err", err)
-			}
-		}()
-	}
-
 	// Activity tracking (M1): focused window + active/away segments from
 	// the GNOME Shell extension. Started asynchronously — the extension may
 	// enable a moment after the daemon (startup race at login), so

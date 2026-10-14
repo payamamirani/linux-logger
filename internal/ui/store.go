@@ -53,6 +53,16 @@ func (s *Store) Records(ctx context.Context, day string) ([]storage.Record, erro
 	return s.st.ScreenshotsForDay(ctx, day)
 }
 
+// AppUsage returns the focused-window segments of one day.
+func (s *Store) AppUsage(ctx context.Context, day string) ([]storage.AppUsageRecord, error) {
+	return s.st.AppUsageForDay(ctx, day)
+}
+
+// ComputerUsage returns the active/away segments of one day.
+func (s *Store) ComputerUsage(ctx context.Context, day string) ([]storage.ComputerUsageRecord, error) {
+	return s.st.ComputerUsageForDay(ctx, day)
+}
+
 // ReadScreenshot returns the raw JPEG bytes of a record.
 func (s *Store) ReadScreenshot(rec storage.Record) ([]byte, error) {
 	return os.ReadFile(filepath.Join(s.dataDir, rec.Path))

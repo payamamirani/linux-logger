@@ -19,14 +19,16 @@ import (
 // scrubbing the timeline.
 const viewerCache = 12
 
-// Window is the main viewer window: day navigation + zoomable 24h timeline
-// on top, the hovered screenshot below.
+// Window is the main viewer window, ManicTime-style: day navigation +
+// stacked timelines on top, Details/Summary panels in the middle, the
+// hovered screenshot at the bottom.
 type Window struct {
 	*gtk.ApplicationWindow
 
 	store *Store
 
-	timeline *Timeline
+	timeline *TimelineStack
+	panels   *Panels
 	dateLbl  *gtk.Label
 	prevBtn  *gtk.Button
 	nextBtn  *gtk.Button
@@ -37,6 +39,8 @@ type Window struct {
 	currentDay string // YYYY-MM-DD
 	records    []storage.Record
 	recSecs    []int // record times-of-day, parallel to records
+	appSegs    []Seg
+	usageSegs  []Seg
 
 	// viewer texture cache (LRU-ish)
 	cacheMu    sync.Mutex
@@ -55,7 +59,7 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	}
 
 	w.SetTitle("Payam Logger")
-	w.SetDefaultSize(1150, 720)
+	w.SetDefaultSize(1200, 860)
 
 	// Header bar with a settings button.
 	header := gtk.NewHeaderBar()
@@ -68,7 +72,7 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 
 	// --- top bar: day navigation + zoom ---------------------------------
 	w.prevBtn = gtk.NewButtonFromIconName("go-previous-symbolic")
-	w.prevBtn.SetTooltipText("Previous day")
+	w.prevBtn.SetTooltipText("Previous day (Left / PgUp)")
 	w.prevBtn.ConnectClicked(func() { w.shiftDay(-1) })
 
 	w.dateLbl = gtk.NewLabel("")
@@ -76,11 +80,11 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	w.dateLbl.SetHAlign(gtk.AlignCenter)
 
 	w.nextBtn = gtk.NewButtonFromIconName("go-next-symbolic")
-	w.nextBtn.SetTooltipText("Next day")
+	w.nextBtn.SetTooltipText("Next day (Right / PgDn)")
 	w.nextBtn.ConnectClicked(func() { w.shiftDay(+1) })
 
 	w.todayBtn = gtk.NewButtonWithLabel("Today")
-	w.todayBtn.SetTooltipText("Jump to today")
+	w.todayBtn.SetTooltipText("Jump to today (Home)")
 	w.todayBtn.ConnectClicked(func() { w.showDay(time.Now().Format("2006-01-02")) })
 
 	zoomOut := gtk.NewButtonFromIconName("zoom-out-symbolic")
@@ -106,18 +110,24 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	zoomBox.Append(zoomIn)
 	topbar.Append(zoomBox)
 
-	// --- timeline --------------------------------------------------------
-	w.timeline = NewTimeline(store.IntervalSec())
+	// --- stacked timelines ------------------------------------------------
+	w.timeline = NewTimelineStack(store.IntervalSec())
 	w.timeline.SetMarginStart(8)
 	w.timeline.SetMarginEnd(8)
 	w.timeline.ConnectHover(w.onTimelineHover)
 	w.timeline.ConnectSelection(w.onTimelineSelection)
+	w.timeline.ConnectTrack(func(kind TrackKind) { w.refreshPanels() })
 
-	// --- viewer + status ---------------------------------------------------
+	// --- details/summary panels --------------------------------------------
+	w.panels = NewPanels()
+	w.panels.ConnectSelect(func(start, end float64) { w.timeline.SetSelection(start, end) })
+
+	// --- viewer + status ------------------------------------------------------
 	w.viewer = gtk.NewPicture()
 	w.viewer.SetHExpand(true)
 	w.viewer.SetVExpand(true)
 	w.viewer.SetContentFit(gtk.ContentFitContain)
+	w.viewer.SetSizeRequest(-1, 240)
 
 	w.status = gtk.NewLabel("")
 	w.status.SetHAlign(gtk.AlignStart)
@@ -128,12 +138,45 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	root := gtk.NewBox(gtk.OrientationVertical, 4)
 	root.Append(topbar)
 	root.Append(w.timeline)
+	w.panels.Widget().SetMarginStart(8)
+	w.panels.Widget().SetMarginEnd(8)
+	root.Append(w.panels.Widget())
 	root.Append(w.viewer)
 	root.Append(w.status)
 	w.SetChild(root)
 
+	w.installShortcuts()
+
 	w.showDay(time.Now().Format("2006-01-02"))
 	return w
+}
+
+// installShortcuts adds the day-view key bindings (ManicTime-compatible).
+func (w *Window) installShortcuts() {
+	ctrl := gtk.NewShortcutController()
+
+	add := func(accel string, fn func()) {
+		trigger := gtk.NewShortcutTriggerParseString(accel)
+		if trigger == nil {
+			log.Printf("bad accelerator %q", accel)
+			return
+		}
+		ctrl.AddShortcut(gtk.NewShortcut(trigger, gtk.NewCallbackAction(
+			func(_ gtk.Widgetter, _ *glib.Variant) bool {
+				fn()
+				return true
+			})))
+	}
+
+	add("Left", func() { w.shiftDay(-1) })                             // ManicTime: PgUp / F7
+	add("Right", func() { w.shiftDay(+1) })                            // ManicTime: PgDown / F8
+	add("Home", func() { w.showDay(time.Now().Format("2006-01-02")) }) // F9
+	add("F5", func() { w.showDay(w.currentDay) })                      // refresh
+	add("Escape", func() { w.timeline.ClearSelection() })
+	add("plus", func() { w.timeline.ZoomIn() })
+	add("minus", func() { w.timeline.ZoomOut() })
+
+	w.AddController(ctrl)
 }
 
 // showDay loads (or empties) one day and redraws everything for it.
@@ -146,7 +189,8 @@ func (w *Window) showDay(day string) {
 		w.dateLbl.SetText(day)
 	}
 
-	records, err := w.store.Records(context.Background(), day)
+	ctx := context.Background()
+	records, err := w.store.Records(ctx, day)
 	if err != nil {
 		log.Printf("load day %s: %v", day, err)
 		records = nil
@@ -162,6 +206,9 @@ func (w *Window) showDay(day string) {
 		}
 	}
 
+	w.appSegs = w.loadAppSegs(day)
+	w.usageSegs = w.loadUsageSegs(day)
+
 	// Viewer starts empty until the user hovers the timeline.
 	w.viewer.SetPaintable(nil)
 	w.lastShownID = -1
@@ -174,9 +221,51 @@ func (w *Window) showDay(day string) {
 	w.todayBtn.SetSensitive(day != today)
 	w.nextBtn.SetSensitive(day != today)
 
-	w.timeline.SetDay(day, records, time.Now())
+	w.timeline.SetDay(day, records, w.appSegs, w.usageSegs, time.Now())
 
+	w.refreshPanels()
 	w.showDayStatus()
+}
+
+func (w *Window) loadAppSegs(day string) []Seg {
+	recs, err := w.store.AppUsage(context.Background(), day)
+	if err != nil {
+		log.Printf("load app usage %s: %v", day, err)
+		return nil
+	}
+	var segs []Seg
+	for _, r := range recs {
+		s, e := rfc3339ToSec(r.Start), rfc3339ToSec(r.End)
+		if e > s {
+			segs = append(segs, Seg{Start: s, End: e, App: r.App, Title: r.Title})
+		}
+	}
+	return segs
+}
+
+func (w *Window) loadUsageSegs(day string) []Seg {
+	recs, err := w.store.ComputerUsage(context.Background(), day)
+	if err != nil {
+		log.Printf("load computer usage %s: %v", day, err)
+		return nil
+	}
+	var segs []Seg
+	for _, r := range recs {
+		s, e := rfc3339ToSec(r.Start), rfc3339ToSec(r.End)
+		if e > s {
+			segs = append(segs, Seg{Start: s, End: e, State: r.State})
+		}
+	}
+	return segs
+}
+
+// rfc3339ToSec converts an RFC3339 timestamp to seconds of its local day.
+func rfc3339ToSec(s string) float64 {
+	ts, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return -1
+	}
+	return float64(ts.Hour()*3600 + ts.Minute()*60 + ts.Second())
 }
 
 func (w *Window) shiftDay(delta int) {
@@ -187,7 +276,113 @@ func (w *Window) shiftDay(delta int) {
 	w.showDay(ts.AddDate(0, 0, delta).Format("2006-01-02"))
 }
 
-// onTimelineHover reacts to the pointer position on the timeline: shows the
+// refreshPanels rebuilds the Details/Summary lists for the active track.
+func (w *Window) refreshPanels() {
+	kind := w.timeline.ActiveTrack()
+
+	var rows []detailRow
+	groups := map[string]float64{}
+
+	switch kind {
+	case TrackApps:
+		for _, s := range w.appSegs {
+			title := s.Title
+			if title == "" {
+				title = "(desktop)"
+			}
+			rows = append(rows, detailRow{
+				title: title, start: formatClock(s.Start), end: formatClock(s.End),
+				duration: formatDuration(s.End - s.Start), selStart: s.Start, selEnd: s.End,
+			})
+			app := s.App
+			if app == "" {
+				app = "(desktop)"
+			}
+			groups[app] += s.End - s.Start
+		}
+	case TrackUsage:
+		for _, s := range w.usageSegs {
+			name := "Active"
+			if s.State == "away" {
+				name = "Away"
+			}
+			rows = append(rows, detailRow{
+				title: name, start: formatClock(s.Start), end: formatClock(s.End),
+				duration: formatDuration(s.End - s.Start), selStart: s.Start, selEnd: s.End,
+			})
+			groups[name] += s.End - s.Start
+		}
+	case TrackScreenshots:
+		for i, r := range w.records {
+			rows = append(rows, detailRow{
+				title: fmt.Sprintf("Screenshot #%d", r.ID),
+				start: shortTime(r.TakenAt), end: "",
+				duration: fmt.Sprintf("%.0f KB", float64(r.SizeBytes)/1024),
+				selStart: float64(w.recSecs[i]), selEnd: float64(w.recSecs[i] + w.store.IntervalSec()),
+			})
+		}
+	}
+
+	w.panels.SetData(kind, rows, summarizeGroups(groups))
+}
+
+// onTimelineSelection shows the selected range duration and its content
+// stats in the status line; a cleared selection restores the day summary.
+func (w *Window) onTimelineSelection(start, end float64) {
+	if start < 0 {
+		w.showDayStatus()
+		return
+	}
+
+	// count screenshots + app time inside [start, end]
+	n := 0
+	for _, s := range w.recSecs {
+		if float64(s) >= start && float64(s) <= end {
+			n++
+		}
+	}
+	var appTime float64
+	for _, s := range w.appSegs {
+		lo, hi := math01(mathMax(start, s.Start)), math01(mathMin(end, s.End))
+		if hi > lo {
+			appTime += hi - lo
+		}
+	}
+	w.status.SetText(fmt.Sprintf("Selected %s → %s • %s • %d screenshots • active %s",
+		formatClock(start), formatClock(end), formatDuration(end-start), n, formatDuration(appTime)))
+}
+
+// tiny math helpers (kept local to avoid importing math everywhere).
+func mathMin(a, b float64) float64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func mathMax(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func math01(v float64) float64 { return v }
+
+func (w *Window) showDayStatus() {
+	if n := len(w.records); n > 0 {
+		var total int64
+		for _, r := range w.records {
+			total += r.SizeBytes
+		}
+		w.status.SetText(fmt.Sprintf("%s — %d screenshots • %.1f MB",
+			w.currentDay, n, float64(total)/1024/1024))
+	} else {
+		w.status.SetText(fmt.Sprintf("%s — no screenshots recorded this day", w.currentDay))
+	}
+}
+
+// onTimelineHover reacts to the pointer position on any timeline: shows the
 // screenshot valid at that moment below, or nothing in white (gap) areas.
 func (w *Window) onTimelineHover(sec float64) {
 	if sec < 0 {
@@ -218,41 +413,6 @@ func (w *Window) onTimelineHover(sec float64) {
 		w.viewer.SetPaintable(tex)
 		return false
 	})
-}
-
-// onTimelineSelection shows the selected range duration and its screenshot
-// count in the status line; a cleared selection restores the day summary.
-func (w *Window) onTimelineSelection(start, end float64) {
-	if start < 0 {
-		w.showDayStatus()
-		return
-	}
-
-	// count records inside [start, end]
-	lo := sort.Search(len(w.recSecs), func(i int) bool { return float64(w.recSecs[i]) >= start })
-	hi := sort.Search(len(w.recSecs), func(i int) bool { return float64(w.recSecs[i]) > end })
-	n := hi - lo
-
-	w.status.SetText(fmt.Sprintf("Selected %s → %s • %s • %d screenshots",
-		formatClock(start), formatClock(end), formatDuration(end-start), n))
-}
-
-func (w *Window) showDayStatus() {
-	if n := len(w.records); n > 0 {
-		var total int64
-		for _, r := range w.records {
-			total += r.SizeBytes
-		}
-		w.status.SetText(fmt.Sprintf("%s — %d screenshots • %.1f MB",
-			w.currentDay, n, float64(total)/1024/1024))
-	} else {
-		w.status.SetText(fmt.Sprintf("%s — no screenshots recorded this day", w.currentDay))
-	}
-}
-
-// formatClock renders seconds-of-day as HH:MM.
-func formatClock(sec float64) string {
-	return fmt.Sprintf("%02d:%02d", int(sec)/3600, int(sec)%3600/60)
 }
 
 // recordAt returns the index of the last record at or before sec; valid is
