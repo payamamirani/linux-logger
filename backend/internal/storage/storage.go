@@ -11,6 +11,8 @@
 package storage
 
 import (
+	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +24,7 @@ import (
 type Store struct {
 	dataDir string
 	dbPath  string
+	db      *sql.DB
 }
 
 // New creates the directory layout and opens the index database.
@@ -65,8 +68,8 @@ func (s *Store) SaveScreenshot(shot *capture.Screenshot) (string, error) {
 
 // Cleanup removes screenshots older than the configured retention.
 //
-// TODO: implement together with storage.retention_days; also delete empty
-// day/month directories and vacuum the index.
-func (s *Store) Cleanup() error {
+// TODO: implement together with storage.retention_days; must delete empty
+// day/month directories and the index rows of removed files.
+func (s *Store) Cleanup(_ context.Context) error {
 	return nil
 }

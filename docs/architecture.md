@@ -42,12 +42,13 @@
    - فایل را در `screenshots/YYYY/MM/DD/HHMMSS.jpg` با پرمیشن `0600` می‌نویسد (حریم خصوصی).
    - رکوردی در `index.db` درج می‌کند (متادیتا برای تایم‌لاین فرانتند).
 
-## اسکیمای دیتابیس (برنامه‌ریزی‌شده)
+## اسکیمای دیتابیس (v1 — پیاده‌سازی‌شده)
 
 ```sql
 CREATE TABLE screenshots (
   id           INTEGER PRIMARY KEY,
-  taken_at     TEXT NOT NULL,   -- UTC, RFC3339
+  taken_at     TEXT NOT NULL,   -- RFC3339 با آفست محلی
+  day          TEXT NOT NULL,   -- YYYY-MM-DD محلی — برای گروه‌بندی/فیلتر ایندکس‌دار
   path         TEXT NOT NULL,   -- نسبت به DataDir
   size_bytes   INTEGER NOT NULL,
   width        INTEGER,
@@ -56,9 +57,13 @@ CREATE TABLE screenshots (
   window_title TEXT             -- آینده: عنوان پنجره فعال
 );
 CREATE INDEX idx_screenshots_taken_at ON screenshots(taken_at);
+CREATE INDEX idx_screenshots_day ON screenshots(day);
 ```
 
-ستون‌های `app` و `window_title` برای قابلیت‌های ManicTime-مانند (ردیابی اپ فعال) رزرو شده‌اند.
+- درایور: `modernc.org/sqlite` (بدون cgo)، WAL mode، تک‌کانکشن (تنها نویسنده دیمن است)
+- نسخه‌بندی اسکیما با `PRAGMA user_version` + migration پله‌ای
+- ستون `day` عمداً جدا از `taken_at` نگه داشته شده تا فرانتند روزها را با equality ایندکس‌دار کوئری کند
+- API آماده برای فرانتند: `Days()` (خلاصه‌ی هر روز، جدیدترین اول) و `ScreenshotsForDay(day)`
 
 ## تصمیمات ثبت‌شده
 
@@ -74,7 +79,7 @@ CREATE INDEX idx_screenshots_taken_at ON screenshots(taken_at);
 ## نقشه راه
 
 - [x] ~~پیاده‌سازی بک‌اند capture~~ — فاز ۱: `extension` (اصلی، بی‌صدا) + `portal` (fallback) + انتخاب خودکار `auto`
-- [ ] ایندکس SQLite + migration
+- [x] ~~ایندکس SQLite + migration~~ — فاز ۲: اسکیمای v1، درج خودکار، کوئری‌های `Days` و `ScreenshotsForDay`
 - [ ] retention/cleanup خودکار (`retention_days`)
 - [ ] فرانتند GTK4 (تایم‌لاین روزانه، پرش بین روزها)
 - [ ] تشخیص قفل صفحه/suspend و توقف capture (اکستنشن قفل را خودش تشخیص می‌دهد؛ suspend سمت دیمن)

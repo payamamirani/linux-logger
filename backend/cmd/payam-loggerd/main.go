@@ -63,8 +63,12 @@ func run(configPath string) error {
 	defer stop()
 
 	d := daemon.New(&cfg, backend, store, logger)
-	if err := d.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		return err
+	runErr := d.Run(ctx)
+	if cerr := store.Close(); cerr != nil {
+		logger.Warn("close index db", "err", cerr)
+	}
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		return runErr
 	}
 	logger.Info("payam-loggerd stopped")
 	return nil
