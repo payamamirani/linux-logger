@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Payam Logger — panel glyph (bold, legible at 16-24px, no background) -->
+  <g fill="#62a0ea">
+    <rect x="3"  y="7" width="9" height="4" rx="2"/>
+    <rect x="14" y="7" width="4" height="4" rx="2"/>
+    <rect x="20" y="7" width="7" height="4" rx="2"/>
+  </g>
+  <g fill="#33d17a">
+    <rect x="3"  y="14" width="5" height="4" rx="2"/>
+    <rect x="10" y="14" width="12" height="4" rx="2"/>
+  </g>
+  <g fill="#c061cb">
+    <rect x="3"  y="21" width="7" height="4" rx="2"/>
+    <rect x="12" y="21" width="3" height="4" rx="1.5"/>
+    <rect x="17" y="21" width="9" height="4" rx="2"/>
+  </g>
+  <line x1="27.5" y1="5" x2="27.5" y2="27" stroke="#f66151" stroke-width="2" stroke-linecap="round"/>
+</svg>

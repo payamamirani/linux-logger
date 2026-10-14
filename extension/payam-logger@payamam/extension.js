@@ -24,9 +24,13 @@
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import GObject from 'gi://GObject';
 import Shell from 'gi://Shell';
+import St from 'gi://St';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
+import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
+import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 
 Gio._promisify(Shell.Screenshot.prototype, 'screenshot');
@@ -60,7 +64,56 @@ const DBUS_INTERFACE = `
   </interface>
 </node>`;
 
-const EXTENSION_VERSION = 2;
+const EXTENSION_VERSION = 3;
+
+// Default web UI port (overridden by ~/.config/payam-logger/config.json).
+const DEFAULT_UI_PORT = 7530;
+
+const PayamIndicator = GObject.registerClass(
+class PayamIndicator extends PanelMenu.Button {
+    _init(extPath, port) {
+        super._init(0.0, 'Payam Logger');
+
+        this._url = `http://127.0.0.1:${port}`;
+
+        const iconFile = Gio.File.new_for_path(
+            GLib.build_filenamev([extPath, 'icon.svg']));
+        this.add_child(new St.Icon({
+            gicon: new Gio.FileIcon({file: iconFile}),
+            style_class: 'system-status-icon',
+        }));
+
+        const open = new PopupMenu.PopupMenuItem('Open Payam Logger');
+        open.connect('activate', () => this._openUI());
+        this.menu.addMenuItem(open);
+
+        this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+
+        const about = new PopupMenu.PopupMenuItem(`Payam Logger v${EXTENSION_VERSION} — ${this._url}`);
+        about.sensitive = false;
+        this.menu.addMenuItem(about);
+    }
+
+    _openUI() {
+        Gio.AppInfo.launch_default_for_uri(this._url, null)
+            .catch(e => console.error(`[payam-logger] open UI: ${e.message}`));
+    }
+});
+
+// readUIPort reads the daemon's web port from its config, if present.
+function readUIPort() {
+    try {
+        const path = GLib.build_filenamev(
+            [GLib.get_user_config_dir(), 'payam-logger', 'config.json']);
+        const [ok, bytes] = GLib.file_get_contents(path);
+        if (!ok)
+            return DEFAULT_UI_PORT;
+        const cfg = JSON.parse(new TextDecoder().decode(bytes));
+        return (cfg.server && cfg.server.port) || DEFAULT_UI_PORT;
+    } catch {
+        return DEFAULT_UI_PORT;
+    }
+}
 
 // After this many ms without input the user counts as idle/away.
 const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
@@ -88,14 +141,26 @@ export default class PayamLoggerExtension extends Extension {
         // gnome-shell API moves again, log it and keep screenshots alive.
         try {
             this._setupActivityTracking();
-            console.log('[payam-logger] extension enabled (v2: activity tracking)');
+            console.log('[payam-logger] extension enabled (v3: activity tracking)');
         } catch (e) {
             console.error(`[payam-logger] activity tracking failed: ${e.message}`);
             console.log('[payam-logger] extension enabled (capture only)');
         }
+
+        // Panel indicator (tray): Open UI menu entry.
+        try {
+            this._indicator = new PayamIndicator(this.path, readUIPort());
+            Main.panel.addToStatusArea('payam-logger', this._indicator);
+        } catch (e) {
+            console.error(`[payam-logger] panel indicator failed: ${e.message}`);
+        }
     }
 
     disable() {
+        if (this._indicator) {
+            this._indicator.destroy();
+            this._indicator = null;
+        }
         this._teardownActivityTracking();
 
         Gio.DBus.session.unown_name(this._nameOwnerId);

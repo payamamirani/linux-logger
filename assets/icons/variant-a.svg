@@ -1,0 +1,30 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- طرح A: تایم‌لاین سه‌ردیفه (همون چیزی که تو UI می‌بینی) -->
+  <defs>
+    <linearGradient id="bgA" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2e34"/>
+      <stop offset="1" stop-color="#161719"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#bgA)"/>
+  <!-- ردیف اسکرین‌شات‌ها (آبی) -->
+  <g fill="#3584e4">
+    <rect x="22" y="38" width="30" height="12" rx="6"/>
+    <rect x="57" y="38" width="13" height="12" rx="6"/>
+    <rect x="75" y="38" width="24" height="12" rx="6"/>
+  </g>
+  <!-- ردیف استفاده (سبز) -->
+  <g fill="#26a269">
+    <rect x="22" y="58" width="16" height="12" rx="6"/>
+    <rect x="43" y="58" width="37" height="12" rx="6"/>
+  </g>
+  <!-- ردیف برنامه‌ها (بنفش) -->
+  <g fill="#9141ac">
+    <rect x="22" y="78" width="22" height="12" rx="6"/>
+    <rect x="49" y="78" width="10" height="12" rx="6"/>
+    <rect x="64" y="78" width="35" height="12" rx="6"/>
+  </g>
+  <!-- نشانگر «الان» -->
+  <line x1="102" y1="36" x2="102" y2="94" stroke="#e01b24" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="102" cy="36" r="5.5" fill="#e01b24"/>
+</svg>

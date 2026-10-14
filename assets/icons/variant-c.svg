@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- طرح C: مینیمال — یک نوار سگمنتی + نقطه‌ی الان (برای سایزهای کوچک) -->
+  <defs>
+    <linearGradient id="bgC" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2c2e34"/>
+      <stop offset="1" stop-color="#161719"/>
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="30" fill="url(#bgC)"/>
+  <rect x="22" y="52" width="46" height="24" rx="12" fill="#3584e4"/>
+  <rect x="74" y="52" width="18" height="24" rx="9" fill="#26a269"/>
+  <circle cx="104" cy="64" r="9" fill="#e01b24"/>
+</svg>
