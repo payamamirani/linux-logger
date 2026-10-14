@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/payamam/payam-logger/backend/internal/capture"
-	"github.com/payamam/payam-logger/backend/internal/config"
-	"github.com/payamam/payam-logger/backend/internal/storage"
+	"github.com/payamam/payam-logger/internal/capture"
+	"github.com/payamam/payam-logger/internal/config"
+	"github.com/payamam/payam-logger/internal/storage"
 )
 
 // fakeBackend counts Capture calls.

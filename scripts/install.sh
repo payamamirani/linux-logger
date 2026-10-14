@@ -12,7 +12,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN_SRC="$ROOT/backend/bin/payam-loggerd"
+BIN_SRC="$ROOT/bin/payam-loggerd"
 BIN_DST="$HOME/.local/bin/payam-loggerd"
 UNIT_SRC="$ROOT/systemd/payam-logger.service"
 UNIT_DST="$HOME/.config/systemd/user/payam-logger.service"

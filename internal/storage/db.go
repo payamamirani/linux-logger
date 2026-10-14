@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/payamam/payam-logger/backend/internal/capture"
+	"github.com/payamam/payam-logger/internal/capture"
 	_ "modernc.org/sqlite" // register the "sqlite" driver (pure Go, no cgo)
 )
 

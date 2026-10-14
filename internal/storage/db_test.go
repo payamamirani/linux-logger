@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/payamam/payam-logger/backend/internal/capture"
+	"github.com/payamam/payam-logger/internal/capture"
 )
 
 func newTestStore(t *testing.T) *Store {

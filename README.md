@@ -2,14 +2,12 @@
 
 ابزار ردیابی فعالیت دسکتاپ برای اوبونتو (شبیه ManicTime) — یک سرویس بک‌گراند که هر ۱ دقیقه از صفحه اسکرین‌شات می‌گیرد و به‌صورت محلی ذخیره می‌کند، به‌همراه یک فرانتند GTK4 برای مشاهده تایم‌لاین.
 
-> **وضعیت:** اسکلت پروژه — سرویس و فرانتند به‌تدریج پیاده‌سازی می‌شوند.
-
 ## معماری
 
 ```
 ┌─────────────────────────┐        ┌──────────────────────────┐
-│  payam-loggerd (Go)     │        │  payam-logger-ui (GTK4)  │
-│  systemd user service   │        │  فرانتند نمایش           │
+│  payam-loggerd (Go)     │        │  payam-logger-ui (Go +   │
+│  systemd user service   │        │  GTK4) — فرانتند نمایش    │
 │                         │        │                          │
 │  scheduler ─► capture ──┼──►disk─┼── reads ─► SQLite index  │
 │  (هر ۶۰ ثانیه)  backends│  JPEG  │        + فایل‌های تصویر   │
@@ -21,39 +19,43 @@
 ```
 
 - **بک‌اند (Go):** دیمنی که با interval مشخص اسکرین‌شات می‌گیرد و روی دیسک + ایندکس SQLite ذخیره می‌کند. لایه‌ی capture به‌صورت pluggable است چون در Wayland (سشن پیش‌فرض اوبونتو) روش گرفتن اسکرین‌شات با X11 فرق دارد.
-- **فرانتند (GTK4):** اپلیکیشن native گنوم برای مرور تایم‌لاین اسکرین‌شات‌ها — مستقیماً از SQLite و فایل‌ها می‌خواند.
+- **فرانتند (Go + GTK4):** اپلیکیشن native گنوم برای مرور تایم‌لاین اسکرین‌شات‌ها — مستقیماً از SQLite و فایل‌ها می‌خواند، بدون ارتباط زنده با سرویس.
 
 ## ساختار پروژه
 
 ```
 payam-logger/
-├── backend/                 # سرویس بک‌گراند (Go)
-│   ├── cmd/payam-loggerd/   # نقطه ورود دیمن
-│   └── internal/
-│       ├── capture/         # بک‌اندهای اسکرین‌شات (portal / gnome-shell / x11)
-│       ├── scheduler/       # حلقه‌ی زمان‌بندی (ticker)
-│       ├── storage/         # ذخیره‌سازی فایل + ایندکس SQLite
-│       ├── config/          # خواندن تنظیمات (JSON)
-│       └── daemon/          # سیم‌کشی اجزا
-├── frontend/                # فرانتند GTK4 (placeholder — بعداً)
+├── cmd/
+│   ├── payam-loggerd/       # سرویس بک‌گراند (دیمن)
+│   └── payam-logger-ui/     # فرانتند GTK4 (تایم‌لاین)
+├── internal/
+│   ├── capture/             # بک‌اندهای اسکرین‌شات (extension / portal / x11)
+│   ├── scheduler/           # حلقه‌ی زمان‌بندی (ticker)
+│   ├── storage/             # ذخیره‌سازی فایل + ایندکس SQLite
+│   ├── config/              # خواندن تنظیمات (JSON)
+│   ├── daemon/              # سیم‌کشی اجزای دیمن
+│   └── ui/                  # منطق فرانتند (ویندو، تایم‌لاین، ...)
 ├── extension/               # اکستنشن GNOME Shell (capture بی‌صدا)
 │   └── payam-logger@payamam/
 ├── systemd/                 # یونیت user service
 ├── config/                  # نمونه فایل تنظیمات
-├── scripts/                 # نصب و اجرای dev
+├── scripts/                 # نصب و تست
 └── docs/                    # معماری و یادداشت‌های فنی
 ```
 
 ## شروع سریع
 
 ```bash
-# بیلد و اجرای آزمایشی در foreground
+# بیلد و اجرای آزمایشی دیمن در foreground
 make run
 
 # یا با فایل تنظیمات
-backend/bin/payam-loggerd -config config/payam-logger.example.json
+bin/payam-loggerd -config config/payam-logger.example.json
 
-# نصب کامل به‌عنوان سرویس واقعی (باینری + systemd + اکستنشن + مجوزها)
+# فرانتند GTK4 (پیش‌نیاز: sudo apt install pkgconf libgtk-4-dev)
+make run-ui
+
+# نصب کامل دیمن به‌عنوان سرویس واقعی (باینری + systemd + اکستنشن + مجوزها)
 make install-user
 ```
 
@@ -71,7 +73,7 @@ systemctl --user disable payam-logger       # غیرفعال‌کردن استا
 
 - Go ≥ 1.24
 - اوبونتو با GNOME (تست‌شده روی 26.04، Wayland و X11)
-- برای فرانتند (بعداً): GTK4 development libraries
+- برای بیلد فرانتند: `sudo apt install pkgconf libgtk-4-dev`
 
 ## مستندات
 

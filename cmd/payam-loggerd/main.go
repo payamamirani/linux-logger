@@ -17,10 +17,10 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/payamam/payam-logger/backend/internal/capture"
-	"github.com/payamam/payam-logger/backend/internal/config"
-	"github.com/payamam/payam-logger/backend/internal/daemon"
-	"github.com/payamam/payam-logger/backend/internal/storage"
+	"github.com/payamam/payam-logger/internal/capture"
+	"github.com/payamam/payam-logger/internal/config"
+	"github.com/payamam/payam-logger/internal/daemon"
+	"github.com/payamam/payam-logger/internal/storage"
 )
 
 func main() {

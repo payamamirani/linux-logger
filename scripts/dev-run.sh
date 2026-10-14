@@ -5,5 +5,5 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-make build
-exec ./backend/bin/payam-loggerd -config config/payam-logger.example.json
+make build-daemon
+exec ./bin/payam-loggerd -config config/payam-logger.example.json

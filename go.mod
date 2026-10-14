@@ -1,4 +1,4 @@
-module github.com/payamam/payam-logger/backend
+module github.com/payamam/payam-logger
 
 go 1.26.0
 

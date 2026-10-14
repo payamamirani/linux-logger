@@ -11,10 +11,10 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"github.com/payamam/payam-logger/backend/internal/capture"
-	"github.com/payamam/payam-logger/backend/internal/config"
-	"github.com/payamam/payam-logger/backend/internal/scheduler"
-	"github.com/payamam/payam-logger/backend/internal/storage"
+	"github.com/payamam/payam-logger/internal/capture"
+	"github.com/payamam/payam-logger/internal/config"
+	"github.com/payamam/payam-logger/internal/scheduler"
+	"github.com/payamam/payam-logger/internal/storage"
 )
 
 const (

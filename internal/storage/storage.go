@@ -16,7 +16,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/payamam/payam-logger/backend/internal/capture"
+	"github.com/payamam/payam-logger/internal/capture"
 )
 
 // Store owns the on-disk layout and the index database.
