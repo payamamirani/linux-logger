@@ -77,5 +77,6 @@ systemctl --user disable payam-logger       # غیرفعال‌کردن استا
 
 ## مستندات
 
+- [docs/roadmap.md](docs/roadmap.md) — نقشه راه کامل parity با ManicTime (فازهای M1–M9)
 - [docs/architecture.md](docs/architecture.md) — معماری و نقشه راه
 - [docs/capture.md](docs/capture.md) — چالش اسکرین‌شات در Wayland و گزینه‌ها
