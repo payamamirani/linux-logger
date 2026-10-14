@@ -1,0 +1,22 @@
+# Go
+backend/bin/
+dist/
+*.test
+*.out
+
+# Local runtime data (screenshots / db) — never commit
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# Logs
+*.log
+
+# Editors / IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store

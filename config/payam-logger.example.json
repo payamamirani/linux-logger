@@ -1,0 +1,16 @@
+{
+  "capture": {
+    "backend": "auto",
+    "interval_sec": 60,
+    "image_format": "jpeg",
+    "jpeg_quality": 80
+  },
+  "storage": {
+    "data_dir": "",
+    "db_path": "",
+    "retention_days": 0
+  },
+  "log": {
+    "level": "info"
+  }
+}

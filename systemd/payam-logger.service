@@ -1,0 +1,18 @@
+[Unit]
+Description=Payam Logger - background screenshot service
+# Bound to the graphical session: screenshots need the session's D-Bus and
+# the running compositor. Starts with login, stops at logout.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/payam-loggerd -config %h/.config/payam-logger/config.json
+Restart=on-failure
+RestartSec=5
+
+# Hardening (relaxed where session access is required)
+NoNewPrivileges=true
+
+[Install]
+WantedBy=graphical-session.target
