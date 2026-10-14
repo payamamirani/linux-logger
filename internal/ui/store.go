@@ -14,8 +14,9 @@ import (
 // It shares the SQLite database with the daemon (WAL mode: concurrent
 // readers are fine).
 type Store struct {
-	st      *storage.Store
-	dataDir string
+	st          *storage.Store
+	dataDir     string
+	intervalSec int
 }
 
 // OpenStore opens the default data location (~/.local/share/payam-logger).
@@ -28,8 +29,16 @@ func OpenStore() (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Store{st: st, dataDir: cfg.Storage.DataDir}, nil
+	return &Store{
+		st:          st,
+		dataDir:     cfg.Storage.DataDir,
+		intervalSec: cfg.Capture.IntervalSec,
+	}, nil
 }
+
+// IntervalSec returns the configured capture interval — the timeline draws
+// one bucket per interval.
+func (s *Store) IntervalSec() int { return s.intervalSec }
 
 // Close closes the underlying database.
 func (s *Store) Close() error { return s.st.Close() }

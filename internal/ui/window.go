@@ -1,14 +1,11 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"image"
-	_ "image/jpeg" // JPEG decoder for the full viewer
 	"log"
+	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/diamondburned/gotk4/pkg/gdk/v4"
@@ -18,28 +15,44 @@ import (
 	"github.com/payamam/payam-logger/internal/storage"
 )
 
-const thumbHeight = 96
+// viewerCache limits how many full screenshots stay decoded in memory while
+// scrubbing the timeline.
+const viewerCache = 12
 
-// Window is the main viewer window.
+// Window is the main viewer window: day navigation + zoomable 24h timeline
+// on top, the hovered screenshot below.
 type Window struct {
 	*gtk.ApplicationWindow
 
 	store *Store
 
-	daysList *gtk.ListBox
+	timeline *Timeline
+	dateLbl  *gtk.Label
+	prevBtn  *gtk.Button
+	nextBtn  *gtk.Button
+	todayBtn *gtk.Button
 	viewer   *gtk.Picture
-	tlScroll *gtk.ScrolledWindow
 	status   *gtk.Label
 
-	// loadState guards the async day-loading (generation counter + cancel).
-	gen    atomic.Int64
-	mu     sync.Mutex
-	cancel context.CancelFunc
+	currentDay string // YYYY-MM-DD
+	records    []storage.Record
+	recSecs    []int // record times-of-day, parallel to records
+
+	// viewer texture cache (LRU-ish)
+	cacheMu    sync.Mutex
+	cache      map[int64]*gdk.Texture
+	cacheOrder []int64
+
+	lastShownID int64
 }
 
-// NewWindow creates the viewer window and starts loading recorded days.
+// NewWindow creates the viewer window and shows today.
 func NewWindow(app *gtk.Application, store *Store) *Window {
-	w := &Window{ApplicationWindow: gtk.NewApplicationWindow(app), store: store}
+	w := &Window{
+		ApplicationWindow: gtk.NewApplicationWindow(app),
+		store:             store,
+		cache:             make(map[int64]*gdk.Texture),
+	}
 
 	w.SetTitle("Payam Logger")
 	w.SetDefaultSize(1150, 720)
@@ -53,204 +66,216 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	header.PackEnd(gear)
 	w.SetTitlebar(header)
 
-	// --- left: recorded days ------------------------------------------
-	w.daysList = gtk.NewListBox()
-	w.daysList.SetVExpand(true)
-	w.daysList.ConnectRowSelected(func(row *gtk.ListBoxRow) {
-		if row != nil {
-			w.loadDay(row.Name())
-		}
-	})
+	// --- top bar: day navigation + zoom ---------------------------------
+	w.prevBtn = gtk.NewButtonFromIconName("go-previous-symbolic")
+	w.prevBtn.SetTooltipText("Previous day")
+	w.prevBtn.ConnectClicked(func() { w.shiftDay(-1) })
 
-	daysScroll := gtk.NewScrolledWindow()
-	daysScroll.SetPolicy(gtk.PolicyNever, gtk.PolicyAutomatic)
-	daysScroll.SetChild(w.daysList)
-	daysScroll.SetSizeRequest(215, -1)
+	w.dateLbl = gtk.NewLabel("")
+	w.dateLbl.SetHExpand(true) // keeps the date centered between the buttons
+	w.dateLbl.SetHAlign(gtk.AlignCenter)
 
-	// --- right: viewer + timeline + status -----------------------------
+	w.nextBtn = gtk.NewButtonFromIconName("go-next-symbolic")
+	w.nextBtn.SetTooltipText("Next day")
+	w.nextBtn.ConnectClicked(func() { w.shiftDay(+1) })
+
+	w.todayBtn = gtk.NewButtonWithLabel("Today")
+	w.todayBtn.SetTooltipText("Jump to today")
+	w.todayBtn.ConnectClicked(func() { w.showDay(time.Now().Format("2006-01-02")) })
+
+	zoomOut := gtk.NewButtonFromIconName("zoom-out-symbolic")
+	zoomOut.SetTooltipText("Zoom out (up to 24h)")
+	zoomOut.ConnectClicked(func() { w.timeline.ZoomOut() })
+
+	zoomIn := gtk.NewButtonFromIconName("zoom-in-symbolic")
+	zoomIn.SetTooltipText("Zoom in (down to 1h)")
+	zoomIn.ConnectClicked(func() { w.timeline.ZoomIn() })
+
+	topbar := gtk.NewBox(gtk.OrientationHorizontal, 6)
+	topbar.SetMarginTop(6)
+	topbar.SetMarginStart(8)
+	topbar.SetMarginEnd(8)
+	topbar.Append(w.prevBtn)
+	topbar.Append(w.dateLbl)
+	topbar.Append(w.nextBtn)
+	topbar.Append(w.todayBtn)
+	topbar.Append(gtk.NewSeparator(gtk.OrientationVertical))
+	zoomBox := gtk.NewBox(gtk.OrientationHorizontal, 2)
+	zoomBox.SetHAlign(gtk.AlignEnd)
+	zoomBox.Append(zoomOut)
+	zoomBox.Append(zoomIn)
+	topbar.Append(zoomBox)
+
+	// --- timeline --------------------------------------------------------
+	w.timeline = NewTimeline(store.IntervalSec())
+	w.timeline.SetMarginStart(8)
+	w.timeline.SetMarginEnd(8)
+	w.timeline.ConnectHover(w.onTimelineHover)
+
+	// --- viewer + status ---------------------------------------------------
 	w.viewer = gtk.NewPicture()
 	w.viewer.SetHExpand(true)
 	w.viewer.SetVExpand(true)
 	w.viewer.SetContentFit(gtk.ContentFitContain)
 
-	tlBox := gtk.NewBox(gtk.OrientationHorizontal, 4)
-	w.tlScroll = gtk.NewScrolledWindow()
-	w.tlScroll.SetPolicy(gtk.PolicyAutomatic, gtk.PolicyNever)
-	w.tlScroll.SetChild(tlBox)
-
 	w.status = gtk.NewLabel("")
 	w.status.SetHAlign(gtk.AlignStart)
+	w.status.SetMarginTop(4)
+	w.status.SetMarginBottom(6)
+	w.status.SetMarginStart(10)
 
-	right := gtk.NewBox(gtk.OrientationVertical, 4)
-	right.Append(w.viewer)
-	right.Append(w.tlScroll)
-	right.Append(w.status)
+	root := gtk.NewBox(gtk.OrientationVertical, 4)
+	root.Append(topbar)
+	root.Append(w.timeline)
+	root.Append(w.viewer)
+	root.Append(w.status)
+	w.SetChild(root)
 
-	paned := gtk.NewPaned(gtk.OrientationHorizontal)
-	paned.SetStartChild(daysScroll)
-	paned.SetEndChild(right)
-	paned.SetPosition(220)
-	paned.SetHExpand(true)
-	paned.SetVExpand(true)
-
-	w.SetChild(paned)
-
-	w.loadDays()
+	w.showDay(time.Now().Format("2006-01-02"))
 	return w
 }
 
-// loadDays fills the day list and selects the most recent day.
-func (w *Window) loadDays() {
-	days, err := w.store.Days(context.Background())
+// showDay loads (or empties) one day and redraws everything for it.
+func (w *Window) showDay(day string) {
+	w.currentDay = day
+
+	if ts, err := time.Parse("2006-01-02", day); err == nil {
+		w.dateLbl.SetText(ts.Format("Mon, 02 Jan 2006"))
+	} else {
+		w.dateLbl.SetText(day)
+	}
+
+	records, err := w.store.Records(context.Background(), day)
 	if err != nil {
-		log.Printf("load days: %v", err)
+		log.Printf("load day %s: %v", day, err)
+		records = nil
 	}
+	w.records = records
 
-	if len(days) == 0 {
-		w.status.SetText("No screenshots recorded yet — is payam-loggerd running?")
-		return
-	}
-
-	var first *gtk.ListBoxRow
-	for _, d := range days {
-		row := gtk.NewListBoxRow()
-		row.SetName(d.Day)
-		label := gtk.NewLabel(fmt.Sprintf("%s\n%d screenshots", d.Day, d.Count))
-		label.SetHAlign(gtk.AlignStart)
-		row.SetChild(label)
-		w.daysList.Append(row)
-		if first == nil {
-			first = row
+	w.recSecs = w.recSecs[:0]
+	for _, r := range records {
+		if ts, err := time.Parse(time.RFC3339, r.TakenAt); err == nil {
+			w.recSecs = append(w.recSecs, ts.Hour()*3600+ts.Minute()*60+ts.Second())
+		} else {
+			w.recSecs = append(w.recSecs, 0)
 		}
 	}
-	w.daysList.SelectRow(first)
-}
 
-// loadDay starts an async load of one day's timeline.
-func (w *Window) loadDay(day string) {
-	gen := w.gen.Add(1)
-
-	w.mu.Lock()
-	if w.cancel != nil {
-		w.cancel()
-	}
-	var ctx context.Context
-	ctx, w.cancel = context.WithCancel(context.Background())
-	w.mu.Unlock()
-
-	// Fresh (empty) timeline strip for this day.
-	tlBox := gtk.NewBox(gtk.OrientationHorizontal, 4)
-	w.tlScroll.SetChild(tlBox)
+	// Viewer starts empty until the user hovers the timeline.
 	w.viewer.SetPaintable(nil)
-	w.status.SetText(fmt.Sprintf("loading %s …", day))
+	w.lastShownID = -1
+	w.cacheMu.Lock()
+	w.cache = make(map[int64]*gdk.Texture)
+	w.cacheOrder = nil
+	w.cacheMu.Unlock()
 
-	go w.loadDayAsync(ctx, gen, day, tlBox)
+	today := time.Now().Format("2006-01-02")
+	w.todayBtn.SetSensitive(day != today)
+	w.nextBtn.SetSensitive(day != today)
+
+	w.timeline.SetDay(day, records, time.Now())
+
+	if n := len(records); n > 0 {
+		var total int64
+		for _, r := range records {
+			total += r.SizeBytes
+		}
+		w.status.SetText(fmt.Sprintf("%s — %d screenshots • %.1f MB",
+			day, n, float64(total)/1024/1024))
+	} else {
+		w.status.SetText(fmt.Sprintf("%s — no screenshots recorded this day", day))
+	}
 }
 
-func (w *Window) loadDayAsync(ctx context.Context, gen int64, day string, tlBox *gtk.Box) {
-	recs, err := w.store.Records(ctx, day)
+func (w *Window) shiftDay(delta int) {
+	ts, err := time.Parse("2006-01-02", w.currentDay)
 	if err != nil {
-		glib.IdleAdd(func() bool {
-			w.status.SetText(fmt.Sprintf("error loading %s: %v", day, err))
-			return false
-		})
+		return
+	}
+	w.showDay(ts.AddDate(0, 0, delta).Format("2006-01-02"))
+}
+
+// onTimelineHover reacts to the pointer position on the timeline: shows the
+// screenshot valid at that moment below, or nothing in white (gap) areas.
+func (w *Window) onTimelineHover(sec float64) {
+	if sec < 0 {
+		return // pointer left the widget — keep the last frame
+	}
+
+	idx, valid := w.recordAt(sec)
+	if !valid {
+		return // hovering a white gap — keep the last frame
+	}
+
+	rec := w.records[idx]
+	if hh, mm := int(sec/3600), int(sec)%3600/60; hh >= 0 {
+		w.status.SetText(fmt.Sprintf("%02d:%02d — shot at %s • %dx%d",
+			hh, mm, shortTime(rec.TakenAt), rec.Width, rec.Height))
+	}
+
+	if rec.ID == w.lastShownID {
 		return
 	}
 
-	total := int64(0)
-	for _, r := range recs {
-		total += r.SizeBytes
+	tex := w.cachedTexture(idx)
+	if tex == nil {
+		return
 	}
-
-	firstShown := false
-	const batch = 12
-	var batchBox *gtk.Box
-
-	for i, rec := range recs {
-		if ctx.Err() != nil { // day changed, abort stale load
-			return
-		}
-
-		data, err := w.store.ReadScreenshot(rec)
-		if err != nil {
-			log.Printf("read %s: %v", rec.Path, err)
-			continue
-		}
-
-		th, err := thumbnail(data, thumbHeight)
-		if err != nil {
-			log.Printf("thumbnail %s: %v", rec.Path, err)
-			continue
-		}
-
-		idx, r := i, rec
-		full := data
-		glib.IdleAdd(func() bool {
-			if w.gen.Load() != gen {
-				return false // stale
-			}
-			if batchBox == nil {
-				batchBox = gtk.NewBox(gtk.OrientationHorizontal, 4)
-				tlBox.Append(batchBox)
-			}
-			batchBox.Append(w.newThumbButton(idx, r, th, full))
-			if !firstShown {
-				firstShown = true
-				w.showFull(r, full)
-				w.status.SetText(fmt.Sprintf("%s — %d screenshots • %.1f MB",
-					day, len(recs), float64(total)/1024/1024))
-			}
-			return false
-		})
-
-		if (i+1)%batch == 0 {
-			// Start a new visual batch on the next iteration so IdleAdd
-			// batches stay small and the UI stays responsive.
-			batchBox = nil
-		}
-	}
-
+	w.lastShownID = rec.ID
 	glib.IdleAdd(func() bool {
-		if w.gen.Load() != gen {
-			return false
-		}
-		if !firstShown {
-			w.status.SetText(fmt.Sprintf("%s — no readable screenshots (%d records)", day, len(recs)))
-		}
+		w.viewer.SetPaintable(tex)
 		return false
 	})
 }
 
-// newThumbButton builds one clickable timeline thumbnail.
-func (w *Window) newThumbButton(idx int, rec storage.Record, thumbPNG, fullJPEG []byte) gtk.Widgetter {
-	pic := gtk.NewPicture()
-	pic.SetContentFit(gtk.ContentFitContain)
-	pic.SetCanShrink(false)
-	pic.SetPaintable(textureFromBytes(thumbPNG))
-	pic.SetSizeRequest(-1, thumbHeight)
-
-	btn := gtk.NewButton()
-	btn.SetChild(pic)
-	btn.SetHasFrame(false)
-	btn.SetTooltipText(shortTime(rec.TakenAt))
-	btn.ConnectClicked(func() { w.showFull(rec, fullJPEG) })
-	return btn
+// recordAt returns the index of the last record at or before sec; valid is
+// false when sec falls into a gap (more than one interval before that
+// record or before the first record of the day).
+func (w *Window) recordAt(sec float64) (int, bool) {
+	if len(w.recSecs) == 0 {
+		return 0, false
+	}
+	idx := sort.Search(len(w.recSecs), func(i int) bool { return float64(w.recSecs[i]) > sec }) - 1
+	if idx < 0 {
+		return 0, false
+	}
+	if sec-float64(w.recSecs[idx]) > float64(w.store.IntervalSec()) {
+		return idx, false // white gap (locked / service off)
+	}
+	return idx, true
 }
 
-// showFull shows the full-resolution screenshot in the viewer.
-func (w *Window) showFull(rec storage.Record, jpegBytes []byte) {
-	w.viewer.SetPaintable(textureFromBytes(jpegBytes))
-	w.viewer.SetTooltipText(fmt.Sprintf("%s — %dx%d", shortTime(rec.TakenAt), rec.Width, rec.Height))
-}
+// cachedTexture returns (and memoizes) the full-size texture of a record.
+func (w *Window) cachedTexture(idx int) *gdk.Texture {
+	rec := w.records[idx]
 
-// textureFromBytes builds a GdkTexture from encoded image bytes.
-func textureFromBytes(encoded []byte) *gdk.Texture {
-	t, err := gdk.NewTextureFromBytes(glib.NewBytes(encoded))
+	w.cacheMu.Lock()
+	if tex, ok := w.cache[rec.ID]; ok {
+		w.cacheMu.Unlock()
+		return tex
+	}
+	w.cacheMu.Unlock()
+
+	data, err := w.store.ReadScreenshot(rec)
 	if err != nil {
-		log.Printf("texture: %v", err)
+		log.Printf("read %s: %v", rec.Path, err)
 		return nil
 	}
-	return t
+	tex, err := gdk.NewTextureFromBytes(glib.NewBytes(data))
+	if err != nil {
+		log.Printf("texture %s: %v", rec.Path, err)
+		return nil
+	}
+
+	w.cacheMu.Lock()
+	w.cache[rec.ID] = tex
+	w.cacheOrder = append(w.cacheOrder, rec.ID)
+	for len(w.cacheOrder) > viewerCache {
+		delete(w.cache, w.cacheOrder[0])
+		w.cacheOrder = w.cacheOrder[1:]
+	}
+	w.cacheMu.Unlock()
+	return tex
 }
 
 // shortTime renders an RFC3339 timestamp as HH:MM:SS.
@@ -260,13 +285,4 @@ func shortTime(rfc3339 string) string {
 		return rfc3339
 	}
 	return t.Format("15:04:05")
-}
-
-// imageDims decodes image dimensions (used in tests).
-func imageDims(b []byte) (int, int) {
-	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
-	if err != nil {
-		return 0, 0
-	}
-	return cfg.Width, cfg.Height
 }
