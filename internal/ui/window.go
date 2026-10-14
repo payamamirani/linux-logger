@@ -44,6 +44,15 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	w.SetTitle("Payam Logger")
 	w.SetDefaultSize(1150, 720)
 
+	// Header bar with a settings button.
+	header := gtk.NewHeaderBar()
+	header.SetTitleWidget(gtk.NewLabel("Payam Logger"))
+	gear := gtk.NewButtonFromIconName("emblem-system-symbolic")
+	gear.SetTooltipText("Settings")
+	gear.ConnectClicked(func() { newSettingsDialog(w) })
+	header.PackEnd(gear)
+	w.SetTitlebar(header)
+
 	// --- left: recorded days ------------------------------------------
 	w.daysList = gtk.NewListBox()
 	w.daysList.SetVExpand(true)

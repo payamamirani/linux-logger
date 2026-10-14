@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
 	"github.com/payamam/payam-logger/internal/capture"
@@ -39,10 +38,9 @@ func run(configPath string) error {
 	// Default config location, used when -config is not passed: pick it up
 	// only if it exists so bare invocations still get sane defaults.
 	if configPath == "" {
-		if dir, err := os.UserConfigDir(); err == nil {
-			candidate := filepath.Join(dir, "payam-logger", "config.json")
-			if _, err := os.Stat(candidate); err == nil {
-				configPath = candidate
+		if p, err := config.DefaultPath(); err == nil {
+			if _, statErr := os.Stat(p); statErr == nil {
+				configPath = p
 			}
 		}
 	}

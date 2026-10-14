@@ -77,3 +77,32 @@ func TestZeroRetentionMeansForever(t *testing.T) {
 		t.Fatalf("retention 0 must be valid (keep forever): %v", err)
 	}
 }
+
+func TestSaveRoundtrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "config.json")
+	want := Default()
+	want.Capture.IntervalSec = 600
+	want.Storage.RetentionDays = 30
+
+	if err := want.Save(path); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load after Save: %v", err)
+	}
+	if got.Capture.IntervalSec != want.Capture.IntervalSec ||
+		got.Storage.RetentionDays != want.Storage.RetentionDays {
+		t.Errorf("roundtrip mismatch: got %+v", got)
+	}
+}
+
+func TestDefaultPathIsAbsolute(t *testing.T) {
+	p, err := DefaultPath()
+	if err != nil {
+		t.Skipf("no user config dir: %v", err)
+	}
+	if !filepath.IsAbs(p) {
+		t.Errorf("DefaultPath = %q, want absolute", p)
+	}
+}

@@ -92,6 +92,34 @@ func Default() Config {
 	}
 }
 
+// DefaultPath returns the default config file location
+// (~/.config/payam-logger/config.json). Parent directories are not created.
+func DefaultPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "payam-logger", "config.json"), nil
+}
+
+// Save writes the config to path as pretty JSON, creating parent
+// directories as needed. File mode 0600 (config may contain local paths).
+func (c Config) Save(path string) error {
+	if dir := filepath.Dir(path); dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("create config dir: %w", err)
+		}
+	}
+	data, err := json.MarshalIndent(c, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode config: %w", err)
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+	return nil
+}
+
 // Load reads path and merges it over the defaults. An empty path returns the
 // plain defaults.
 func Load(path string) (Config, error) {
