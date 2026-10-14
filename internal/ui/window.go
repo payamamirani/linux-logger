@@ -41,6 +41,11 @@ type Window struct {
 	recSecs    []int // record times-of-day, parallel to records
 	appSegs    []Seg
 	usageSegs  []Seg
+	tagSegs    []Seg
+	tags       []storage.TagRecord
+
+	// current record shown in the viewer (index into records)
+	viewIdx int
 
 	// viewer texture cache (LRU-ish)
 	cacheMu    sync.Mutex
@@ -48,6 +53,24 @@ type Window struct {
 	cacheOrder []int64
 
 	lastShownID int64
+}
+
+// ctx is the background context used for store reads.
+func (w *Window) ctx() context.Context { return context.Background() }
+
+// recentTagNames returns the distinct tag names of the current day
+// (most recent first, capped).
+func (w *Window) recentTagNames() []string {
+	seen := map[string]bool{}
+	var out []string
+	for i := len(w.tags) - 1; i >= 0 && len(out) < 6; i-- {
+		n := w.tags[i].Name
+		if !seen[n] {
+			seen[n] = true
+			out = append(out, n)
+		}
+	}
+	return out
 }
 
 // NewWindow creates the viewer window and shows today.
@@ -95,6 +118,17 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	zoomIn.SetTooltipText("Zoom in (down to 1h)")
 	zoomIn.ConnectClicked(func() { w.timeline.ZoomIn() })
 
+	addTag := gtk.NewButtonWithLabel("Add tag")
+	addTag.SetTooltipText("Tag the selected time (or enter times manually)")
+	addTag.ConnectClicked(func() {
+		lo, hi := w.timeline.selection()
+		newAddTagDialog(w, lo, hi)
+	})
+
+	timesheet := gtk.NewButtonFromIconName("x-office-document-symbolic")
+	timesheet.SetTooltipText("Timesheet report")
+	timesheet.ConnectClicked(func() { newTimesheetWindow(w) })
+
 	topbar := gtk.NewBox(gtk.OrientationHorizontal, 6)
 	topbar.SetMarginTop(6)
 	topbar.SetMarginStart(8)
@@ -103,6 +137,8 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	topbar.Append(w.dateLbl)
 	topbar.Append(w.nextBtn)
 	topbar.Append(w.todayBtn)
+	topbar.Append(addTag)
+	topbar.Append(timesheet)
 	topbar.Append(gtk.NewSeparator(gtk.OrientationVertical))
 	zoomBox := gtk.NewBox(gtk.OrientationHorizontal, 2)
 	zoomBox.SetHAlign(gtk.AlignEnd)
@@ -117,17 +153,52 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	w.timeline.ConnectHover(w.onTimelineHover)
 	w.timeline.ConnectSelection(w.onTimelineSelection)
 	w.timeline.ConnectTrack(func(kind TrackKind) { w.refreshPanels() })
+	w.timeline.ConnectDeleteTag(func(tagID int64) { confirmDeleteTag(w, tagID) })
 
 	// --- details/summary panels --------------------------------------------
 	w.panels = NewPanels()
 	w.panels.ConnectSelect(func(start, end float64) { w.timeline.SetSelection(start, end) })
 
-	// --- viewer + status ------------------------------------------------------
+	// --- viewer + toolbar + status -------------------------------------
 	w.viewer = gtk.NewPicture()
 	w.viewer.SetHExpand(true)
 	w.viewer.SetVExpand(true)
 	w.viewer.SetContentFit(gtk.ContentFitContain)
-	w.viewer.SetSizeRequest(-1, 240)
+	w.viewer.SetSizeRequest(-1, 220)
+
+	prevBtn := gtk.NewButtonFromIconName("go-previous-symbolic")
+	prevBtn.SetTooltipText("Previous screenshot")
+	prevBtn.ConnectClicked(func() { w.stepViewer(-1) })
+	nextBtn := gtk.NewButtonFromIconName("go-next-symbolic")
+	nextBtn.SetTooltipText("Next screenshot")
+	nextBtn.ConnectClicked(func() { w.stepViewer(+1) })
+
+	saveBtn := gtk.NewButtonFromIconName("document-save-symbolic")
+	saveBtn.SetTooltipText("Save this screenshot as…")
+	saveBtn.ConnectClicked(func() {
+		if w.viewIdx >= 0 && w.viewIdx < len(w.records) {
+			saveScreenshotAs(w, w.records[w.viewIdx])
+		}
+	})
+
+	delBtn := gtk.NewButtonFromIconName("user-trash-symbolic")
+	delBtn.SetTooltipText("Delete this screenshot")
+	delBtn.ConnectClicked(func() {
+		if w.viewIdx >= 0 && w.viewIdx < len(w.records) {
+			confirmDeleteScreenshot(w, w.records[w.viewIdx].ID)
+		}
+	})
+
+	vtoolbar := gtk.NewBox(gtk.OrientationHorizontal, 4)
+	vtoolbar.SetMarginStart(8)
+	vtoolbar.Append(prevBtn)
+	vtoolbar.Append(nextBtn)
+	vtoolbar.Append(saveBtn)
+	vtoolbar.Append(delBtn)
+
+	viewerBox := gtk.NewBox(gtk.OrientationVertical, 2)
+	viewerBox.Append(w.viewer)
+	viewerBox.Append(vtoolbar)
 
 	w.status = gtk.NewLabel("")
 	w.status.SetHAlign(gtk.AlignStart)
@@ -141,7 +212,7 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	w.panels.Widget().SetMarginStart(8)
 	w.panels.Widget().SetMarginEnd(8)
 	root.Append(w.panels.Widget())
-	root.Append(w.viewer)
+	root.Append(viewerBox)
 	root.Append(w.status)
 	w.SetChild(root)
 
@@ -208,10 +279,12 @@ func (w *Window) showDay(day string) {
 
 	w.appSegs = w.loadAppSegs(day)
 	w.usageSegs = w.loadUsageSegs(day)
+	w.tagSegs, w.tags = w.loadTags(day)
 
 	// Viewer starts empty until the user hovers the timeline.
 	w.viewer.SetPaintable(nil)
 	w.lastShownID = -1
+	w.viewIdx = -1
 	w.cacheMu.Lock()
 	w.cache = make(map[int64]*gdk.Texture)
 	w.cacheOrder = nil
@@ -221,7 +294,7 @@ func (w *Window) showDay(day string) {
 	w.todayBtn.SetSensitive(day != today)
 	w.nextBtn.SetSensitive(day != today)
 
-	w.timeline.SetDay(day, records, w.appSegs, w.usageSegs, time.Now())
+	w.timeline.SetDay(day, records, w.appSegs, w.usageSegs, w.tagSegs, time.Now())
 
 	w.refreshPanels()
 	w.showDayStatus()
@@ -257,6 +330,45 @@ func (w *Window) loadUsageSegs(day string) []Seg {
 		}
 	}
 	return segs
+}
+
+// loadTags loads the day's tags as timeline segments (colored by the
+// first-level tag) and keeps the raw records for the panels.
+func (w *Window) loadTags(day string) ([]Seg, []storage.TagRecord) {
+	recs, err := w.store.TagsForDay(context.Background(), day)
+	if err != nil {
+		log.Printf("load tags %s: %v", day, err)
+		return nil, nil
+	}
+	var segs []Seg
+	for _, r := range recs {
+		s, e := rfc3339ToSec(r.Start), rfc3339ToSec(r.End)
+		if e > s {
+			segs = append(segs, Seg{
+				Start: s, End: e,
+				App:   firstLevel(r.Name),
+				Title: r.Name,
+				ID:    r.ID,
+			})
+		}
+	}
+	return segs, recs
+}
+
+// stepViewer moves the shown screenshot by delta records.
+func (w *Window) stepViewer(delta int) {
+	if len(w.records) == 0 {
+		return
+	}
+	w.viewIdx = (w.viewIdx + delta + len(w.records)) % len(w.records)
+	rec := w.records[w.viewIdx]
+
+	if tex := w.cachedTexture(w.viewIdx); tex != nil {
+		w.viewer.SetPaintable(tex)
+		w.lastShownID = rec.ID
+		w.status.SetText(fmt.Sprintf("%s — shot at %s • %dx%d",
+			shortTime(rec.TakenAt), shortTime(rec.TakenAt), rec.Width, rec.Height))
+	}
 }
 
 // rfc3339ToSec converts an RFC3339 timestamp to seconds of its local day.
@@ -320,6 +432,23 @@ func (w *Window) refreshPanels() {
 				duration: fmt.Sprintf("%.0f KB", float64(r.SizeBytes)/1024),
 				selStart: float64(w.recSecs[i]), selEnd: float64(w.recSecs[i] + w.store.IntervalSec()),
 			})
+		}
+	case TrackTags:
+		for _, tg := range w.tags {
+			title := tg.Name
+			if tg.Note != "" {
+				title += " — " + tg.Note
+			}
+			if tg.Billable {
+				title += "  $"
+			}
+			rows = append(rows, detailRow{
+				title: title,
+				start: shortTime(tg.Start), end: shortTime(tg.End),
+				duration: formatDuration(durationBetween(tg.Start, tg.End)),
+				selStart: rfc3339ToSec(tg.Start), selEnd: rfc3339ToSec(tg.End),
+			})
+			groups[firstLevel(tg.Name)] += durationBetween(tg.Start, tg.End)
 		}
 	}
 
@@ -395,6 +524,7 @@ func (w *Window) onTimelineHover(sec float64) {
 	}
 
 	rec := w.records[idx]
+	w.viewIdx = idx
 	if hh, mm := int(sec/3600), int(sec)%3600/60; hh >= 0 {
 		w.status.SetText(fmt.Sprintf("%02d:%02d — shot at %s • %dx%d",
 			hh, mm, shortTime(rec.TakenAt), rec.Width, rec.Height))

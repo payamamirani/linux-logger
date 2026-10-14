@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/payamam/payam-logger/internal/config"
 	"github.com/payamam/payam-logger/internal/storage"
@@ -61,6 +62,31 @@ func (s *Store) AppUsage(ctx context.Context, day string) ([]storage.AppUsageRec
 // ComputerUsage returns the active/away segments of one day.
 func (s *Store) ComputerUsage(ctx context.Context, day string) ([]storage.ComputerUsageRecord, error) {
 	return s.st.ComputerUsageForDay(ctx, day)
+}
+
+// TagsForDay returns the manual tags of one day.
+func (s *Store) TagsForDay(ctx context.Context, day string) ([]storage.TagRecord, error) {
+	return s.st.TagsForDay(ctx, day)
+}
+
+// AddTag records a manual tag.
+func (s *Store) AddTag(start, end time.Time, name, note string, billable bool) error {
+	return s.st.AddTag(start, end, name, note, billable)
+}
+
+// DeleteTag removes a tag.
+func (s *Store) DeleteTag(ctx context.Context, id int64) error {
+	return s.st.DeleteTag(ctx, id)
+}
+
+// TagRowsRange returns raw tag rows for the timesheet.
+func (s *Store) TagRowsRange(ctx context.Context, from, to string) ([]storage.TagRow, error) {
+	return s.st.TagRowsRange(ctx, from, to)
+}
+
+// DeleteScreenshot removes a screenshot file and row.
+func (s *Store) DeleteScreenshot(ctx context.Context, id int64) error {
+	return s.st.DeleteScreenshot(ctx, id)
 }
 
 // ReadScreenshot returns the raw JPEG bytes of a record.

@@ -121,6 +121,7 @@ func (p *Panels) SetTrack(kind TrackKind) {
 		TrackScreenshots: "Screenshots",
 		TrackUsage:       "Computer usage",
 		TrackApps:        "Applications",
+		TrackTags:        "Tags",
 	}
 	p.trackLbl.SetMarkup(fmt.Sprintf("<b>%s</b>", names[kind]))
 }

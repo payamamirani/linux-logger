@@ -29,6 +29,7 @@ const (
 	trackShotsH = 34
 	trackUsageH = 22
 	trackAppsH  = 28
+	trackTagsH  = 24
 )
 
 // Colors (RGB 0..1).
@@ -65,13 +66,14 @@ func appColor(app string) [3]float64 {
 	return appPalette[h.Sum32()%uint32(len(appPalette))]
 }
 
-// Seg is one time segment on the usage or applications track (seconds of
-// day, end exclusive).
+// Seg is one time segment on the usage, applications or tags track
+// (seconds of day, end exclusive).
 type Seg struct {
 	Start, End float64
-	App        string // applications track
+	App        string // applications track / color key (first-level tag)
 	Title      string
 	State      string // computer usage track: active|away
+	ID         int64  // tags track: tag id
 }
 
 // TrackKind identifies a timeline row.
@@ -81,6 +83,7 @@ const (
 	TrackScreenshots TrackKind = iota
 	TrackUsage
 	TrackApps
+	TrackTags
 )
 
 // track is one row of the stack.
@@ -132,6 +135,7 @@ type TimelineStack struct {
 	onHover     func(sec float64)
 	onSelection func(start, end float64)
 	onTrack     func(kind TrackKind)
+	onDeleteTag func(tagID int64)
 
 	// pan drag state
 	panning      bool
@@ -179,6 +183,7 @@ func NewTimelineStack(intervalSec int) *TimelineStack {
 		{TrackScreenshots, "Screenshots", trackShotsH},
 		{TrackUsage, "Usage", trackUsageH},
 		{TrackApps, "Applications", trackAppsH},
+		{TrackTags, "Tags", trackTagsH},
 	} {
 		tr := &track{kind: spec.kind, has: make([]bool, t.nBuckets)}
 		tr.da = gtk.NewDrawingArea()
@@ -230,6 +235,9 @@ func (t *TimelineStack) ConnectSelection(fn func(start, end float64)) { t.onSele
 // ConnectTrack fires when the active track changes (click on a row).
 func (t *TimelineStack) ConnectTrack(fn func(kind TrackKind)) { t.onTrack = fn }
 
+// ConnectDeleteTag fires on right-click over a tag segment.
+func (t *TimelineStack) ConnectDeleteTag(fn func(tagID int64)) { t.onDeleteTag = fn }
+
 // ActiveTrack returns the currently selected track kind.
 func (t *TimelineStack) ActiveTrack() TrackKind { return t.tracks[t.active].kind }
 
@@ -250,6 +258,18 @@ func (t *TimelineStack) ClearSelection() {
 	t.emitSelection()
 }
 
+// selection returns the current range (lo, hi) or (-1,-1) when none.
+func (t *TimelineStack) selection() (float64, float64) {
+	if t.selStart < 0 {
+		return -1, -1
+	}
+	lo, hi := t.selStart, t.selEnd
+	if lo > hi {
+		lo, hi = hi, lo
+	}
+	return lo, hi
+}
+
 // SetSelection selects a range programmatically (details panel rows).
 func (t *TimelineStack) SetSelection(start, end float64) {
 	t.selStart, t.selEnd = start, end
@@ -259,7 +279,7 @@ func (t *TimelineStack) SetSelection(start, end float64) {
 
 // SetDay loads one day's data and auto-zooms to its data span (ManicTime
 // behavior); an empty day falls back to the default 08:00–18:00 window.
-func (t *TimelineStack) SetDay(day string, records []storage.Record, appSegs, usageSegs []Seg, now time.Time) {
+func (t *TimelineStack) SetDay(day string, records []storage.Record, appSegs, usageSegs, tagSegs []Seg, now time.Time) {
 	shots := t.tracks[int(TrackScreenshots)]
 	shots.has = make([]bool, t.nBuckets)
 	for _, r := range records {
@@ -274,6 +294,7 @@ func (t *TimelineStack) SetDay(day string, records []storage.Record, appSegs, us
 	}
 	t.tracks[int(TrackUsage)].segs = usageSegs
 	t.tracks[int(TrackApps)].segs = appSegs
+	t.tracks[int(TrackTags)].segs = tagSegs
 
 	if day == now.Format("2006-01-02") {
 		t.isToday = true
@@ -502,6 +523,22 @@ func (t *TimelineStack) attachControllers(w *gtk.DrawingArea, tr *track) {
 	})
 	pan.ConnectDragEnd(func(x, y float64) { t.panning = false })
 	w.AddController(pan)
+
+	// Right-click on the tags track → delete that tag.
+	if tr != nil && tr.kind == TrackTags {
+		rc := gtk.NewGestureClick()
+		rc.SetButton(gdk.BUTTON_SECONDARY)
+		rc.ConnectPressed(func(n int, x, y float64) {
+			sec := t.xToSec(x)
+			for _, s := range tr.segs {
+				if sec >= s.Start && sec < s.End && t.onDeleteTag != nil {
+					t.onDeleteTag(s.ID)
+					return
+				}
+			}
+		})
+		w.AddController(rc)
+	}
 }
 
 func (t *TimelineStack) attachRulerControllers(w *gtk.DrawingArea) {
@@ -630,7 +667,7 @@ func (t *TimelineStack) drawTrack(tr *track, cr *cairo.Context, width, height in
 			cr.Fill()
 		}
 
-	case TrackApps:
+	case TrackApps, TrackTags:
 		cr.SetFontSize(10)
 		for _, s := range tr.segs {
 			x0, x1 := secToX(s.Start), secToX(s.End)
