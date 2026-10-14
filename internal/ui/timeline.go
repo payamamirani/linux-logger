@@ -46,9 +46,11 @@ const chipFillAlpha = 0.16
 // Interaction:
 //   - hover         → green position line + time; reports the second under
 //     the cursor (onHover)
-//   - left drag     → range selection with sticky edges that snap to the
-//     boundaries of screenshot runs; pulling harder than snapRadiusPx breaks
-//     the stick. Reports (start,end) seconds, or (-1,-1) when cleared.
+//   - left drag     → range selection: starts exactly at the press point
+//     (each new drag replaces the previous selection); the moving end edge
+//     is sticky — it snaps to screenshot-run boundaries while close, and
+//     pulling harder than snapRadiusPx breaks free. Reports (start,end)
+//     seconds, or (-1,-1) when cleared.
 //   - middle drag / horizontal scroll → pan
 //   - vertical scroll / +− buttons → zoom (1h..24h)
 type Timeline struct {
@@ -134,9 +136,13 @@ func NewTimeline(intervalSec int) *Timeline {
 	t.AddController(scroll)
 
 	// --- selection: left drag ---------------------------------------------
+	// Start = exactly where the pointer presses (no snapping, so every new
+	// drag genuinely replaces the previous selection); the moving end edge
+	// keeps the sticky magnet to screenshot-run boundaries.
 	sel := gtk.NewGestureDrag()
 	sel.ConnectDragBegin(func(x, y float64) {
-		start, _ := t.snap(t.xToSec(x))
+		t.selPressX = x
+		start := t.xToSec(x)
 		t.selStart, t.selEnd = start, start
 		t.QueueDraw()
 		t.emitSelection()
