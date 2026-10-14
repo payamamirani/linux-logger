@@ -12,6 +12,7 @@ import (
 	"github.com/diamondburned/gotk4/pkg/glib/v2"
 	"github.com/diamondburned/gotk4/pkg/gtk/v4"
 
+	"github.com/payamam/payam-logger/internal/autotag"
 	"github.com/payamam/payam-logger/internal/storage"
 )
 
@@ -42,6 +43,7 @@ type Window struct {
 	appSegs    []Seg
 	usageSegs  []Seg
 	tagSegs    []Seg
+	autoSegs   []Seg
 	tags       []storage.TagRecord
 
 	// current record shown in the viewer (index into records)
@@ -129,6 +131,10 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	timesheet.SetTooltipText("Timesheet report")
 	timesheet.ConnectClicked(func() { newTimesheetWindow(w) })
 
+	rulesBtn := gtk.NewButtonFromIconName("text-editor-symbolic")
+	rulesBtn.SetTooltipText("Autotag rules")
+	rulesBtn.ConnectClicked(func() { autotagEditor(w) })
+
 	topbar := gtk.NewBox(gtk.OrientationHorizontal, 6)
 	topbar.SetMarginTop(6)
 	topbar.SetMarginStart(8)
@@ -139,6 +145,7 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	topbar.Append(w.todayBtn)
 	topbar.Append(addTag)
 	topbar.Append(timesheet)
+	topbar.Append(rulesBtn)
 	topbar.Append(gtk.NewSeparator(gtk.OrientationVertical))
 	zoomBox := gtk.NewBox(gtk.OrientationHorizontal, 2)
 	zoomBox.SetHAlign(gtk.AlignEnd)
@@ -154,6 +161,7 @@ func NewWindow(app *gtk.Application, store *Store) *Window {
 	w.timeline.ConnectSelection(w.onTimelineSelection)
 	w.timeline.ConnectTrack(func(kind TrackKind) { w.refreshPanels() })
 	w.timeline.ConnectDeleteTag(func(tagID int64) { confirmDeleteTag(w, tagID) })
+	w.timeline.ConnectAddAutotag(func(app, title string) { newAddAutotagDialog(w, app, title) })
 
 	// --- details/summary panels --------------------------------------------
 	w.panels = NewPanels()
@@ -280,6 +288,7 @@ func (w *Window) showDay(day string) {
 	w.appSegs = w.loadAppSegs(day)
 	w.usageSegs = w.loadUsageSegs(day)
 	w.tagSegs, w.tags = w.loadTags(day)
+	w.autoSegs = w.computeAutotags()
 
 	// Viewer starts empty until the user hovers the timeline.
 	w.viewer.SetPaintable(nil)
@@ -294,7 +303,7 @@ func (w *Window) showDay(day string) {
 	w.todayBtn.SetSensitive(day != today)
 	w.nextBtn.SetSensitive(day != today)
 
-	w.timeline.SetDay(day, records, w.appSegs, w.usageSegs, w.tagSegs, time.Now())
+	w.timeline.SetDay(day, records, w.appSegs, w.usageSegs, w.tagSegs, w.autoSegs, time.Now())
 
 	w.refreshPanels()
 	w.showDayStatus()
@@ -353,6 +362,42 @@ func (w *Window) loadTags(day string) ([]Seg, []storage.TagRecord) {
 		}
 	}
 	return segs, recs
+}
+
+// computeAutotags applies the stored rules over the day's app usage.
+func (w *Window) computeAutotags() []Seg {
+	rules, err := w.store.Autotags(context.Background())
+	if err != nil {
+		log.Printf("load autotags: %v", err)
+		return nil
+	}
+	atRules := make([]autotag.Rule, len(rules))
+	for i, r := range rules {
+		atRules[i] = autotag.Rule{
+			ID: r.ID, Name: r.Name,
+			AppPattern: r.AppPattern, TitlePattern: r.TitlePattern,
+		}
+	}
+	usage := make([]autotag.Usage, len(w.appSegs))
+	for i, s := range w.appSegs {
+		usage[i] = autotag.Usage{Start: s.Start, End: s.End, App: s.App, Title: s.Title}
+	}
+
+	var segs []Seg
+	for _, seg := range autotag.Apply(atRules, usage) {
+		segs = append(segs, Seg{
+			Start: seg.Start, End: seg.End,
+			App: firstLevel(seg.Name), Title: seg.Name, ID: seg.RuleID,
+		})
+	}
+	return segs
+}
+
+// reloadAutotags recomputes and redraws after rule changes.
+func (w *Window) reloadAutotags() {
+	w.autoSegs = w.computeAutotags()
+	w.timeline.SetDay(w.currentDay, w.records, w.appSegs, w.usageSegs, w.tagSegs, w.autoSegs, time.Now())
+	w.refreshPanels()
 }
 
 // stepViewer moves the shown screenshot by delta records.

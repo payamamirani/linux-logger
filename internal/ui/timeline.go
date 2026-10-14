@@ -30,6 +30,7 @@ const (
 	trackUsageH = 22
 	trackAppsH  = 28
 	trackTagsH  = 24
+	trackAutoH  = 22
 )
 
 // Colors (RGB 0..1).
@@ -84,6 +85,7 @@ const (
 	TrackUsage
 	TrackApps
 	TrackTags
+	TrackAutotags
 )
 
 // track is one row of the stack.
@@ -132,10 +134,11 @@ type TimelineStack struct {
 	selStart, selEnd float64
 	selPressX        float64
 
-	onHover     func(sec float64)
-	onSelection func(start, end float64)
-	onTrack     func(kind TrackKind)
-	onDeleteTag func(tagID int64)
+	onHover      func(sec float64)
+	onSelection  func(start, end float64)
+	onTrack      func(kind TrackKind)
+	onDeleteTag  func(tagID int64)
+	onAddAutotag func(app, title string)
 
 	// pan drag state
 	panning      bool
@@ -184,6 +187,7 @@ func NewTimelineStack(intervalSec int) *TimelineStack {
 		{TrackUsage, "Usage", trackUsageH},
 		{TrackApps, "Applications", trackAppsH},
 		{TrackTags, "Tags", trackTagsH},
+		{TrackAutotags, "Autotags", trackAutoH},
 	} {
 		tr := &track{kind: spec.kind, has: make([]bool, t.nBuckets)}
 		tr.da = gtk.NewDrawingArea()
@@ -238,6 +242,9 @@ func (t *TimelineStack) ConnectTrack(fn func(kind TrackKind)) { t.onTrack = fn }
 // ConnectDeleteTag fires on right-click over a tag segment.
 func (t *TimelineStack) ConnectDeleteTag(fn func(tagID int64)) { t.onDeleteTag = fn }
 
+// ConnectAddAutotag fires on right-click over an applications segment.
+func (t *TimelineStack) ConnectAddAutotag(fn func(app, title string)) { t.onAddAutotag = fn }
+
 // ActiveTrack returns the currently selected track kind.
 func (t *TimelineStack) ActiveTrack() TrackKind { return t.tracks[t.active].kind }
 
@@ -279,7 +286,7 @@ func (t *TimelineStack) SetSelection(start, end float64) {
 
 // SetDay loads one day's data and auto-zooms to its data span (ManicTime
 // behavior); an empty day falls back to the default 08:00–18:00 window.
-func (t *TimelineStack) SetDay(day string, records []storage.Record, appSegs, usageSegs, tagSegs []Seg, now time.Time) {
+func (t *TimelineStack) SetDay(day string, records []storage.Record, appSegs, usageSegs, tagSegs, autotagSegs []Seg, now time.Time) {
 	shots := t.tracks[int(TrackScreenshots)]
 	shots.has = make([]bool, t.nBuckets)
 	for _, r := range records {
@@ -295,6 +302,7 @@ func (t *TimelineStack) SetDay(day string, records []storage.Record, appSegs, us
 	t.tracks[int(TrackUsage)].segs = usageSegs
 	t.tracks[int(TrackApps)].segs = appSegs
 	t.tracks[int(TrackTags)].segs = tagSegs
+	t.tracks[int(TrackAutotags)].segs = autotagSegs
 
 	if day == now.Format("2006-01-02") {
 		t.isToday = true
@@ -539,6 +547,22 @@ func (t *TimelineStack) attachControllers(w *gtk.DrawingArea, tr *track) {
 		})
 		w.AddController(rc)
 	}
+
+	// Right-click on the applications track → create an autotag rule.
+	if tr != nil && tr.kind == TrackApps {
+		rc := gtk.NewGestureClick()
+		rc.SetButton(gdk.BUTTON_SECONDARY)
+		rc.ConnectPressed(func(n int, x, y float64) {
+			sec := t.xToSec(x)
+			for _, s := range tr.segs {
+				if sec >= s.Start && sec < s.End && t.onAddAutotag != nil {
+					t.onAddAutotag(s.App, s.Title)
+					return
+				}
+			}
+		})
+		w.AddController(rc)
+	}
 }
 
 func (t *TimelineStack) attachRulerControllers(w *gtk.DrawingArea) {
@@ -667,7 +691,7 @@ func (t *TimelineStack) drawTrack(tr *track, cr *cairo.Context, width, height in
 			cr.Fill()
 		}
 
-	case TrackApps, TrackTags:
+	case TrackApps, TrackTags, TrackAutotags:
 		cr.SetFontSize(10)
 		for _, s := range tr.segs {
 			x0, x1 := secToX(s.Start), secToX(s.End)

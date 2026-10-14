@@ -89,6 +89,21 @@ func (s *Store) DeleteScreenshot(ctx context.Context, id int64) error {
 	return s.st.DeleteScreenshot(ctx, id)
 }
 
+// Autotags returns all autotag rules.
+func (s *Store) Autotags(ctx context.Context) ([]storage.AutotagRule, error) {
+	return s.st.Autotags(ctx)
+}
+
+// AddAutotag stores a rule.
+func (s *Store) AddAutotag(ctx context.Context, name, appPattern, titlePattern string) error {
+	return s.st.AddAutotag(ctx, name, appPattern, titlePattern)
+}
+
+// DeleteAutotag removes a rule.
+func (s *Store) DeleteAutotag(ctx context.Context, id int64) error {
+	return s.st.DeleteAutotag(ctx, id)
+}
+
 // ReadScreenshot returns the raw JPEG bytes of a record.
 func (s *Store) ReadScreenshot(rec storage.Record) ([]byte, error) {
 	return os.ReadFile(filepath.Join(s.dataDir, rec.Path))

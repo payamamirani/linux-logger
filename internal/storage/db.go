@@ -12,7 +12,7 @@ import (
 
 // schemaVersion is the current DB schema version, stored in
 // PRAGMA user_version. Migrations bump this and add steps below.
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migrations maps a schema version to the statements that upgrade a DB from
 // that version to the next one.
@@ -65,6 +65,17 @@ var migrations = map[int][]string{
 			billable INTEGER NOT NULL DEFAULT 0
 		)`,
 		`CREATE INDEX idx_tags_day ON tags(day)`,
+	},
+	2: {
+		// v3 (M4): autotag rules. Rules are evaluated on the fly over
+		// app_usage; nothing is stored per-day.
+		`CREATE TABLE autotags (
+			id            INTEGER PRIMARY KEY,
+			name          TEXT NOT NULL,   -- tag to assign (comma hierarchy ok)
+			app_pattern   TEXT NOT NULL DEFAULT '',   -- substring, '' = any
+			title_pattern TEXT NOT NULL DEFAULT '',   -- substring, '' = any
+			created_at    TEXT NOT NULL
+		)`,
 	},
 }
 
