@@ -35,8 +35,8 @@ vet:
 test:
 	$(GO) test ./...
 
-## install-user: install binary + systemd user service and enable it
-install-user: build-daemon
+## install-user: install binary + UI + systemd user service and enable it
+install-user: build
 	./scripts/install.sh
 
 ## install-extension: install the GNOME Shell extension (silent capture)
