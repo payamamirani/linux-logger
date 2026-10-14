@@ -24,7 +24,6 @@
 
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import Meta from 'gi://Meta';
 import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -85,8 +84,15 @@ export default class PayamLoggerExtension extends Extension {
         this._lastEmit = 0;
         this._watchIds = [];
 
-        this._setupActivityTracking();
-        console.log('[payam-logger] extension enabled (v2: activity tracking)');
+        // Activity tracking must never take Capture down with it: if any
+        // gnome-shell API moves again, log it and keep screenshots alive.
+        try {
+            this._setupActivityTracking();
+            console.log('[payam-logger] extension enabled (v2: activity tracking)');
+        } catch (e) {
+            console.error(`[payam-logger] activity tracking failed: ${e.message}`);
+            console.log('[payam-logger] extension enabled (capture only)');
+        }
     }
 
     disable() {
@@ -116,8 +122,14 @@ export default class PayamLoggerExtension extends Extension {
             global.workspace_manager.connect('workspace-switched',
                 () => this._onFocusChanged()));
 
+        // Track the initial state too.
+        this._lastFocus = null;
+        this._onFocusChanged();
+
         // Idle/away detection via Mutter's IdleMonitor.
-        const monitor = Meta.get_backend().get_idle_monitor();
+        // (mutter 18 / GNOME 50: Meta.get_backend() and get_idle_monitor()
+        // are gone — the core monitor hangs off global.backend.)
+        const monitor = global.backend.get_core_idle_monitor();
         this._idleWatchId = monitor.add_idle_watch(IDLE_THRESHOLD_MS, () => {
             // Fires each time the user *has been* idle for the threshold;
             // only report the transition once until activity resumes.
@@ -139,7 +151,7 @@ export default class PayamLoggerExtension extends Extension {
             global.display.disconnect(id);
         this._watchIds = [];
 
-        const monitor = Meta.get_backend().get_idle_monitor();
+        const monitor = global.backend.get_core_idle_monitor();
         if (this._idleWatchId) {
             monitor.remove_watch(this._idleWatchId);
             this._idleWatchId = 0;
