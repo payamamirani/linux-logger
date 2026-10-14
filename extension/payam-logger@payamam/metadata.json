@@ -1,0 +1,7 @@
+{
+  "uuid": "payam-logger@payamam",
+  "name": "Payam Logger Capture",
+  "description": "Silent screenshot backend for payam-loggerd — no flash, no sound, no dialogs",
+  "shell-version": ["50"],
+  "version": 1
+}

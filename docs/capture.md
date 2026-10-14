@@ -32,9 +32,40 @@ gdbus call --session \
 
 ### تصمیم فاز ۰
 
-- **بک‌اند اصلی: `portal`** ✅ (بی‌صدا، بدون دیالوگ، مستقل از compositor)
-- بک‌اند `gnome-shell`: از لیست پیاده‌سازی حذف/کم‌اولویت می‌شود (روی GNOME مدرن مرده است)
-- بک‌اند `x11`: به‌عنوان fallback برای سشن‌های Xorg باقی می‌ماند
+- **بک‌اند اصلی: `extension`** ✅ — اکستنشن GNOME Shell با `Shell.Screenshot` داخلی (بی‌صدا: بدون فلاش، بدون صدا، بدون دیالوگ)
+- بک‌اند `portal`: fallback (کار می‌کند ولی **فلاش و صدای شاتر دارد** — هاردکد در xdg-desktop-portal-gnome)
+- بک‌اند `gnome-shell`: مرده روی GNOME ۵۰+
+- بک‌اند `x11`: fallback برای سشن‌های Xorg
+
+## ریشه‌ی فلاش و صدای شاتر (کشف فاز ۰)
+
+مسیر پورتال چنین است:
+
+```
+ما → org.freedesktop.portal.Screenshot
+   → xdg-desktop-portal-gnome (screenshotdialog.c)
+   → org.gnome.Shell.Screenshot D-Bus با flash=TRUE هاردکد!
+   → js/ui/screenshot.js: _flashAsync() → Flashspot + play_from_theme('screen-capture')
+```
+
+- در `screenshotdialog.c` متد `do_take_screenshot` مقدار flash را **TRUE هاردکد** کرده — هیچ option پورتالی برای غیرفعال‌کردنش وجود ندارد.
+- در `js/ui/screenshot.js` متد `_flashAsync` فلاش **و** صدای شاتر را با هم پخش می‌کند.
+- ولی خودِ `Shell.Screenshot` (شیء C داخلی) نه فلاش دارد نه صدا — فقط صفحه را paint می‌کند و PNG در stream می‌نویسد (حتی پارامتر flash هم ندارد).
+
+### راه‌حل: اکستنشن `payam-logger@payamam`
+
+اکستنشن درون فرایند gnome-shell اجرا می‌شود و می‌تواند `new Shell.Screenshot()` را مستقیم صدا بزند — دقیقاً مثل کد خود گنوم — و نتیجه را روی D-Bus (`org.payam.Logger.Capture(filepath)`) در اختیار دیمن بگذارد.
+
+ایمنی اکستنشن:
+
+- فقط اجازه‌ی نوشتن داخل `~/.local/share/payam-logger/` را دارد (با canonicalize مسیر)
+- اگر administrator ذخیره روی دیسک را قفل کرده باشد (`org.gnome.desktop.lockdown`) خودداری می‌کند
+- وقتی session قفل است عکس نمی‌گیرد
+- فراخوانی‌ها سریالایز می‌شوند (Shell.Screenshot همزمان فقط یک عملیات می‌پذیرد)
+
+نصب: `make install-extension` — بار اول نیاز به یک logout/login دارد (گنوم‌شل اکستنشن‌ها را فقط موقع استارت اسکن می‌کند)؛ بعدش `scripts/extension-capture-test.sh` برای تست.
+
+> مجوز permission store ای که در فاز ۰ گرفتیم برای بک‌اند `portal` (fallback) همان‌جا می‌ماند.
 
 ## مسئله
 

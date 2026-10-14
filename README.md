@@ -36,6 +36,8 @@ payam-logger/
 │       ├── config/          # خواندن تنظیمات (JSON)
 │       └── daemon/          # سیم‌کشی اجزا
 ├── frontend/                # فرانتند GTK4 (placeholder — بعداً)
+├── extension/               # اکستنشن GNOME Shell (capture بی‌صدا)
+│   └── payam-logger@payamam/
 ├── systemd/                 # یونیت user service
 ├── config/                  # نمونه فایل تنظیمات
 ├── scripts/                 # نصب و اجرای dev

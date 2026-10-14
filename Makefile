@@ -27,6 +27,10 @@ test:
 install-user: build
 	./scripts/install.sh
 
+## install-extension: install the GNOME Shell extension (silent capture)
+install-extension:
+	./scripts/install-extension.sh
+
 ## clean: remove build artifacts
 clean:
 	rm -rf backend/bin

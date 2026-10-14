@@ -55,6 +55,8 @@ func New(name string) (Backend, error) {
 		return newPortal()
 	case "gnome-shell":
 		return newGnomeShell()
+	case "extension":
+		return newExtension()
 	case "x11":
 		return newX11()
 	default:
