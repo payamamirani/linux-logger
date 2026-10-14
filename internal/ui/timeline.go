@@ -780,20 +780,22 @@ func clipText(cr *cairo.Context, s string, maxw int) string {
 	return "…"
 }
 
-// formatDuration renders a duration as "2h 13m", "45m" or "1h".
+// formatDuration renders a duration as "2h 13m", "13m 45s" or "45s".
 func formatDuration(sec float64) string {
 	if sec < 0 {
 		sec = 0
 	}
-	h := int(sec) / 3600
-	m := (int(sec) % 3600) / 60
+	s := int(math.Round(sec))
+	h, m, secPart := s/3600, (s%3600)/60, s%60
 	switch {
 	case h > 0 && m > 0:
 		return fmt.Sprintf("%dh %dm", h, m)
 	case h > 0:
 		return fmt.Sprintf("%dh", h)
+	case m > 0:
+		return fmt.Sprintf("%dm %ds", m, secPart)
 	default:
-		return fmt.Sprintf("%dm", m)
+		return fmt.Sprintf("%ds", secPart)
 	}
 }
 
