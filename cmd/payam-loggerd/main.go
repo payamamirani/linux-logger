@@ -20,6 +20,7 @@ import (
 	"github.com/payamam/payam-logger/internal/config"
 	"github.com/payamam/payam-logger/internal/daemon"
 	"github.com/payamam/payam-logger/internal/storage"
+	"github.com/payamam/payam-logger/internal/web"
 )
 
 func main() {
@@ -74,6 +75,15 @@ func run(configPath string) error {
 
 	d := daemon.New(&cfg, backend, store, logger)
 	defer d.Close()
+
+	// Embedded web UI (localhost only).
+	ui := web.New(store, &cfg, logger)
+	go func() {
+		if err := ui.Run(ctx); err != nil && ctx.Err() == nil {
+			logger.Error("web server failed", "err", err)
+		}
+	}()
+
 	runErr := d.Run(ctx)
 	if cerr := store.Close(); cerr != nil {
 		logger.Warn("close index db", "err", cerr)

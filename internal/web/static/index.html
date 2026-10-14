@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Payam Logger</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="nav">
+    <button id="prevDay" title="روز قبل (←)">◀</button>
+    <div id="dateLabel" class="date">—</div>
+    <button id="nextDay" title="روز بعد (→)">▶</button>
+    <button id="todayBtn">امروز</button>
+  </div>
+  <div class="spacer"></div>
+  <div class="actions">
+    <button id="addTagBtn" class="primary">+ افزودن تگ</button>
+    <button id="rulesBtn" title="قوانین اتوتگ">⚙ اتوتگ</button>
+    <button id="timesheetBtn" title="گزارش تایم‌شیت">📊 تایم‌شیت</button>
+    <button id="settingsBtn" title="تنظیمات">🔧</button>
+    <button id="zoomOut" title="کوچک‌نمایی">−</button>
+    <button id="zoomIn" title="بزرگ‌نمایی">+</button>
+  </div>
+</header>
+
+<main>
+  <div id="timelineWrap">
+    <div id="trackLabels">
+      <div class="tlabel" data-track="shots" style="height:34px">اسکرین‌شات‌ها</div>
+      <div class="tlabel" data-track="usage" style="height:22px">استفاده</div>
+      <div class="tlabel" data-track="apps" style="height:28px">برنامه‌ها</div>
+      <div class="tlabel" data-track="tags" style="height:24px">تگ‌ها</div>
+      <div class="tlabel" data-track="autotags" style="height:22px">اتوتگ‌ها</div>
+    </div>
+    <canvas id="timeline"></canvas>
+  </div>
+
+  <div id="panels">
+    <section id="detailsPanel">
+      <div class="panel-head">
+        <b id="detailsTitle">برنامه‌ها</b>
+        <input id="filterInput" placeholder="فیلتر…">
+      </div>
+      <div id="detailsRows" class="rows"></div>
+    </section>
+    <section id="summaryPanel">
+      <div class="panel-head"><b>خلاصه</b></div>
+      <div id="summaryRows" class="rows"></div>
+    </section>
+  </div>
+
+  <div id="viewerBox">
+    <div id="viewerBar">
+      <button id="shotPrev" title="عکس قبلی">◀</button>
+      <button id="shotNext" title="عکس بعدی">▶</button>
+      <span id="shotInfo"></span>
+      <span class="spacer"></span>
+      <a id="shotSave" class="btn" download title="ذخیره">💾</a>
+      <button id="shotDelete" title="حذف">🗑</button>
+    </div>
+    <img id="viewer" alt="اسکرین‌شات">
+  </div>
+</main>
+
+<footer id="status">در حال بارگذاری…</footer>
+
+<!-- Add tag dialog -->
+<dialog id="tagDlg">
+  <form method="dialog" id="tagForm">
+    <h3>افزودن تگ</h3>
+    <label>نام تگ <input name="name" required placeholder="مشتری، پروژه، کار"></label>
+    <label>یادداشت <input name="note" placeholder="اختیاری"></label>
+    <label class="inline"><input type="checkbox" name="billable"> قابل صورت‌حساب</label>
+    <div class="times">
+      <label>شروع <input name="start" pattern="\d{2}:\d{2}" placeholder="HH:MM" required></label>
+      <label>پایان <input name="end" pattern="\d{2}:\d{2}" placeholder="HH:MM" required></label>
+    </div>
+    <div id="tagRecent" class="recent"></div>
+    <div class="dlg-error" id="tagErr"></div>
+    <div class="dlg-actions">
+      <button type="button" class="cancel" onclick="tagDlg.close()">انصراف</button>
+      <button type="submit" class="primary">ذخیره</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Add autotag dialog -->
+<dialog id="autoDlg">
+  <form method="dialog" id="autoForm">
+    <h3>افزودن قانون اتوتگ</h3>
+    <label>نام تگ <input name="name" required placeholder="مثلاً مرور وب"></label>
+    <label>برنامه شامل <input name="app" placeholder="مثلاً firefox (خالی = همه)"></label>
+    <label>عنوان پنجره شامل <input name="title" placeholder="مثلاً gmail (خالی = همه)"></label>
+    <div class="dlg-error" id="autoErr"></div>
+    <div class="dlg-actions">
+      <button type="button" class="cancel" onclick="autoDlg.close()">انصراف</button>
+      <button type="submit" class="primary">ذخیره</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- Rules editor -->
+<dialog id="rulesDlg">
+  <h3>قوانین اتوتگ</h3>
+  <div id="rulesList"></div>
+  <div class="dlg-actions">
+    <button class="cancel" onclick="rulesDlg.close()">بستن</button>
+  </div>
+</dialog>
+
+<!-- Timesheet -->
+<dialog id="tsDlg">
+  <h3>تایم‌شیت</h3>
+  <div class="ts-controls">
+    <label>از <input id="tsFrom" placeholder="YYYY-MM-DD"></label>
+    <label>تا <input id="tsTo" placeholder="YYYY-MM-DD"></label>
+    <select id="tsLevel">
+      <option value="0">همه سطوح</option>
+      <option value="1">سطح اول</option>
+      <option value="2">سطح دوم</option>
+      <option value="3">سطح سوم</option>
+    </select>
+    <button id="tsGen" class="primary">تولید</button>
+    <button id="tsCsv">CSV</button>
+    <button id="tsCopy">کپی</button>
+  </div>
+  <div id="tsRows" class="rows"></div>
+  <div class="dlg-actions"><button class="cancel" onclick="tsDlg.close()">بستن</button></div>
+</dialog>
+
+<!-- Settings -->
+<dialog id="setDlg">
+  <h3>تنظیمات</h3>
+  <label>فاصله‌ی اسکرین‌شات
+    <select id="setInterval">
+      <option value="60">هر ۱ دقیقه</option>
+      <option value="120">هر ۲ دقیقه</option>
+      <option value="300">هر ۵ دقیقه</option>
+      <option value="600">هر ۱۰ دقیقه</option>
+      <option value="900">هر ۱۵ دقیقه</option>
+      <option value="1800">هر ۳۰ دقیقه</option>
+      <option value="3600">هر ۶۰ دقیقه</option>
+    </select>
+  </label>
+  <label>نگه‌داری (روز)
+    <input id="setRetention" type="number" min="1" max="60">
+  </label>
+  <label class="inline"><input type="checkbox" id="setForever"> نگه‌داری همیشگی</label>
+  <div class="dlg-error" id="setErr"></div>
+  <div class="dlg-actions">
+    <button class="cancel" onclick="setDlg.close()">انصراف</button>
+    <button id="setSave" class="primary">اعمال (سرویس ری‌استارت می‌شود)</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

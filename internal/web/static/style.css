@@ -1,0 +1,95 @@
+:root {
+  --bg: #1e1f22;
+  --panel: #27282b;
+  --border: #3a3b3e;
+  --text: #e6e6e6;
+  --muted: #9a9a9d;
+  --blue: #3584e4;
+  --green: #26a269;
+  --red: #e01b24;
+  --hover: #2f3034;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: "Vazirmatn", "Segoe UI", system-ui, sans-serif; font-size: 14px;
+  display: flex; flex-direction: column;
+}
+button, select, input {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 12px; cursor: pointer; font: inherit;
+}
+button:hover, select:hover { background: var(--hover); }
+button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+button.primary:hover { filter: brightness(1.1); }
+.spacer { flex: 1; }
+
+header {
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+}
+header .nav { display: flex; align-items: center; gap: 6px; }
+header .date { min-width: 150px; text-align: center; font-weight: 600; }
+header .actions { display: flex; align-items: center; gap: 6px; }
+
+main { flex: 1; display: flex; flex-direction: column; min-height: 0; padding: 8px 14px; gap: 8px; }
+
+#timelineWrap { display: flex; gap: 6px; }
+#trackLabels { width: 82px; flex: none; }
+.tlabel {
+  display: flex; align-items: center; color: var(--muted); font-size: 12px;
+  cursor: pointer; padding-left: 6px; border-left: 3px solid transparent;
+}
+.tlabel.active { color: var(--text); font-weight: 700; border-left-color: var(--blue); }
+#timeline { flex: 1; display: block; cursor: crosshair; }
+
+#panels { display: flex; gap: 8px; height: 190px; }
+#panels section {
+  flex: 1; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 8px; display: flex; flex-direction: column; min-width: 0;
+}
+.panel-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 6px 10px; border-bottom: 1px solid var(--border); gap: 8px;
+}
+.panel-head input { width: 140px; padding: 3px 8px; font-size: 12px; }
+.rows { flex: 1; overflow-y: auto; font-size: 12.5px; }
+.row {
+  display: flex; justify-content: space-between; gap: 10px;
+  padding: 4px 10px; cursor: pointer; white-space: nowrap;
+}
+.row:hover { background: var(--hover); }
+.row .title { overflow: hidden; text-overflow: ellipsis; direction: ltr; text-align: left; }
+.row .meta { color: var(--muted); direction: ltr; flex: none; }
+.row .share { color: var(--muted); }
+
+#viewerBox { flex: 1; min-height: 120px; display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+#viewerBar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-bottom: 1px solid var(--border); }
+#viewerBar button { padding: 2px 10px; }
+#viewerBar .btn { text-decoration: none; display: inline-block; padding: 3px 10px; }
+#shotInfo { color: var(--muted); font-size: 12px; direction: ltr; }
+#viewer { flex: 1; object-fit: contain; min-height: 0; width: 100%; background: #111; }
+
+footer { padding: 5px 14px; color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--border); direction: ltr; text-align: left; }
+
+dialog {
+  background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  border-radius: 10px; padding: 18px; min-width: 340px;
+}
+dialog::backdrop { background: rgba(0,0,0,.55); }
+dialog h3 { margin: 0 0 12px; }
+dialog label { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+dialog label.inline { flex-direction: row; align-items: center; gap: 8px; }
+dialog .times { display: flex; gap: 10px; }
+dialog .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+dialog .dlg-error { color: var(--red); min-height: 18px; font-size: 12px; }
+.recent { display: flex; flex-wrap: wrap; gap: 6px; }
+.recent button { font-size: 12px; padding: 3px 10px; }
+.ts-controls { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin-bottom: 10px; }
+.ts-controls label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; margin: 0; }
+.ts-controls input { direction: ltr; }
+#tsRows { max-height: 320px; min-width: 380px; }
+#rulesList { min-width: 380px; max-height: 320px; overflow-y: auto; }
+.rule { display: flex; justify-content: space-between; gap: 8px; padding: 6px 4px; border-bottom: 1px solid var(--border); align-items: center; }
+.rule code { direction: ltr; color: var(--muted); font-size: 11.5px; }

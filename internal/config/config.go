@@ -17,6 +17,9 @@ const (
 	DefaultIntervalSec = 60
 	DefaultJPEGQuality = 80
 
+	// DefaultServerPort for the embedded web UI (localhost only).
+	DefaultServerPort = 7530
+
 	// DefaultRetentionDays is how long screenshots are kept before the
 	// daily cleanup purges them. 0 means keep forever.
 	DefaultRetentionDays = 10
@@ -35,7 +38,14 @@ const (
 type Config struct {
 	Capture CaptureConfig `json:"capture"`
 	Storage StorageConfig `json:"storage"`
+	Server  ServerConfig  `json:"server"`
 	Log     LogConfig     `json:"log"`
+}
+
+// ServerConfig controls the embedded web UI.
+type ServerConfig struct {
+	// Port the UI/API listens on (bound to 127.0.0.1 only).
+	Port int `json:"port"`
 }
 
 // CaptureConfig controls how and when screenshots are taken.
@@ -88,7 +98,8 @@ func Default() Config {
 			DBPath:        "",
 			RetentionDays: DefaultRetentionDays,
 		},
-		Log: LogConfig{Level: "info"},
+		Server: ServerConfig{Port: DefaultServerPort},
+		Log:    LogConfig{Level: "info"},
 	}
 }
 
@@ -144,6 +155,15 @@ func Load(path string) (Config, error) {
 }
 
 func (c *Config) validate() error {
+	if err := c.ValidatePublic(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ValidatePublic applies the product rules; used by both Load and the web
+// settings API.
+func (c *Config) ValidatePublic() error {
 	if c.Capture.IntervalSec < MinIntervalSec {
 		return fmt.Errorf("capture.interval_sec must be at least %d (one screenshot per minute at most)", MinIntervalSec)
 	}

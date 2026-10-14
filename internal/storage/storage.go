@@ -41,6 +41,15 @@ func New(dataDir, dbPath string) (*Store, error) {
 // DataDir returns the root data directory.
 func (s *Store) DataDir() string { return s.dataDir }
 
+// ReadScreenshotAbs returns the raw bytes of a screenshot given its path
+// relative to the data dir (embedded web UI).
+func (s *Store) ReadScreenshotAbs(relPath string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(s.dataDir, relPath))
+}
+
+// DB exposes the underlying handle for read queries (embedded web UI).
+func (s *Store) DB() *sql.DB { return s.db }
+
 // SaveScreenshot writes shot into the dated layout and records it in the
 // index. It returns the path relative to DataDir.
 func (s *Store) SaveScreenshot(shot *capture.Screenshot) (string, error) {
