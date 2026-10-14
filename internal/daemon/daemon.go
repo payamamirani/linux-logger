@@ -30,15 +30,14 @@ const (
 
 // Daemon is the payam-loggerd background service.
 type Daemon struct {
-	cfg       *config.Config
-	backend   capture.Backend
-	store     *storage.Store
-	log       *slog.Logger
-	sched     *scheduler.Scheduler
-	cleanup   *scheduler.Scheduler // nil when retention is disabled
-	collector *activity.Collector
-	bus       *dbus.Conn
-	wg        sync.WaitGroup
+	cfg     *config.Config
+	backend capture.Backend
+	store   *storage.Store
+	log     *slog.Logger
+	sched   *scheduler.Scheduler
+	cleanup *scheduler.Scheduler // nil when retention is disabled
+	bus     *dbus.Conn
+	wg      sync.WaitGroup
 
 	// isLocked reports whether the session is currently locked. Injectable
 	// for tests; nil means lock detection is unavailable.
@@ -68,14 +67,6 @@ func New(cfg *config.Config, backend capture.Backend, store *storage.Store, log 
 
 	if cfg.Storage.RetentionDays > 0 {
 		d.cleanup = scheduler.New(cleanupInterval, log)
-	}
-
-	// Activity tracking (M1): focused window + active/away segments from
-	// the GNOME Shell extension. Optional — screenshots work without it.
-	if collector, err := activity.NewCollector(store, log); err != nil {
-		log.Warn("activity tracking disabled", "err", err)
-	} else {
-		d.collector = collector
 	}
 
 	return d
@@ -118,6 +109,27 @@ func (d *Daemon) Run(ctx context.Context) error {
 			}
 		}()
 	}
+
+	// Activity tracking (M1): focused window + active/away segments from
+	// the GNOME Shell extension. Started asynchronously — the extension may
+	// enable a moment after the daemon (startup race at login), so
+	// NewCollector retries for a while. Optional: without it, screenshots
+	// keep working.
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		collector, err := activity.NewCollector(ctx, d.store, d.log)
+		if err != nil {
+			if ctx.Err() == nil {
+				d.log.Warn("activity tracking disabled", "err", err)
+			}
+			return
+		}
+		if err := collector.Run(ctx); err != nil &&
+			!errors.Is(err, context.Canceled) {
+			d.log.Error("activity collector failed", "err", err)
+		}
+	}()
 
 	err := d.sched.Run(ctx, d.captureOnce)
 	d.wg.Wait()

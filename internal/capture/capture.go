@@ -89,16 +89,42 @@ func New(opts Options, log *slog.Logger) (Backend, error) {
 
 // newAuto picks a backend based on what is available on the session bus:
 // the extension (silent) first, then the portal, then X11 tools.
+//
+// At login the daemon (started by graphical-session.target) can come up a
+// beat before the GNOME Shell extension finishes enabling — so we wait a
+// little for org.payam.Logger before falling back.
 func newAuto(opts Options, log *slog.Logger) (Backend, error) {
 	conn, err := dbus.SessionBus()
 	if err != nil {
 		return nil, fmt.Errorf("connect session bus: %w", err)
 	}
 
-	if nameHasOwner(conn, "org.payam.Logger") {
-		log.Info("auto: extension backend available")
-		return newExtension(opts)
+	const (
+		waitForExtension = 20 * time.Second
+		probeEvery       = 500 * time.Millisecond
+	)
+
+	deadline := time.Now().Add(waitForExtension)
+	waited := false
+	for {
+		if nameHasOwner(conn, "org.payam.Logger") {
+			if waited {
+				log.Info("auto: extension backend appeared during startup wait")
+			} else {
+				log.Info("auto: extension backend available")
+			}
+			return newExtension(opts)
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		if !waited {
+			log.Info("auto: extension not up yet — waiting up to 20s", "backend_hint", "extension")
+			waited = true
+		}
+		time.Sleep(probeEvery)
 	}
+
 	if nameHasOwner(conn, portalBusName) {
 		log.Info("auto: portal backend available (extension not found — install it with: make install-extension)")
 		return newPortal(opts)

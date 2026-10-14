@@ -122,7 +122,11 @@ type Collector struct {
 // NewCollector connects to the session bus and seeds the initial state. It
 // returns an error when the extension (v2+) is unavailable — activity
 // tracking is optional; screenshots keep working without it.
-func NewCollector(store Store, log *slog.Logger) (*Collector, error) {
+//
+// The extension can enable a moment after the daemon starts, so GetStatus
+// is retried for a short window (aborting early when ctx is cancelled)
+// before giving up.
+func NewCollector(ctx context.Context, store Store, log *slog.Logger) (*Collector, error) {
 	// Private connection (not the godbus shared one): closing it on error
 	// or shutdown must not break other users of the session bus.
 	conn, err := dbus.ConnectSessionBus()
@@ -130,14 +134,36 @@ func NewCollector(store Store, log *slog.Logger) (*Collector, error) {
 		return nil, fmt.Errorf("connect session bus: %w", err)
 	}
 
+	const (
+		seedWait  = 60 * time.Second
+		seedEvery = time.Second
+	)
+
 	var app, title string
 	var workspace int32
 	var idle bool
-	err = conn.Object(extBusName, extObjPath).
-		Call(extIface+".GetStatus", 0).Store(&app, &title, &workspace, &idle)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("extension v2 not available (GetStatus): %w", err)
+	deadline := time.Now().Add(seedWait)
+	waited := false
+	for {
+		err = conn.Object(extBusName, extObjPath).
+			Call(extIface+".GetStatus", 0).Store(&app, &title, &workspace, &idle)
+		if err == nil {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			conn.Close()
+			return nil, fmt.Errorf("extension v2 not available (GetStatus): %w", err)
+		}
+		if !waited {
+			log.Info("extension not up yet — activity tracking waits up to 60s")
+			waited = true
+		}
+		select {
+		case <-ctx.Done():
+			conn.Close()
+			return nil, ctx.Err()
+		case <-time.After(seedEvery):
+		}
 	}
 
 	tr := &tracker{store: store, log: log}

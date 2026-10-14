@@ -31,7 +31,7 @@ def main() -> int:
     try:
         res = bus.call_sync(
             BUS, PATH, IFACE, "GetStatus", None,
-            Gio.VariantType("(ssib)"), Gio.DBusCallFlags.NONE, -1, None)
+            GLib.VariantType.new("(ssib)"), Gio.DBusCallFlags.NONE, -1, None)
         app, title, ws, idle = res.unpack()
         print(f"status: app={app!r} title={title!r} workspace={ws} idle={idle}")
     except GLib.Error as e:
