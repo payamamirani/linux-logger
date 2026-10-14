@@ -8,7 +8,7 @@
   "storage": {
     "data_dir": "",
     "db_path": "",
-    "retention_days": 0
+    "retention_days": 10
   },
   "log": {
     "level": "info"

@@ -16,6 +16,19 @@ const (
 	DefaultBackend     = "auto" // detect Wayland/X11 at runtime
 	DefaultIntervalSec = 60
 	DefaultJPEGQuality = 80
+
+	// DefaultRetentionDays is how long screenshots are kept before the
+	// daily cleanup purges them. 0 means keep forever.
+	DefaultRetentionDays = 10
+)
+
+// Validation bounds.
+const (
+	// MinIntervalSec — one screenshot per minute at most (per spec).
+	MinIntervalSec = 60
+
+	// MaxRetentionDays caps retention; 0 is the special "keep forever".
+	MaxRetentionDays = 60
 )
 
 // Config is the root configuration object.
@@ -70,8 +83,12 @@ func Default() Config {
 			ImageFormat: "jpeg",
 			JPEGQuality: DefaultJPEGQuality,
 		},
-		Storage: StorageConfig{},
-		Log:     LogConfig{Level: "info"},
+		Storage: StorageConfig{
+			DataDir:       "", // resolved by Resolve/DataDir
+			DBPath:        "",
+			RetentionDays: DefaultRetentionDays,
+		},
+		Log: LogConfig{Level: "info"},
 	}
 }
 
@@ -99,11 +116,17 @@ func Load(path string) (Config, error) {
 }
 
 func (c *Config) validate() error {
-	if c.Capture.IntervalSec <= 0 {
-		return fmt.Errorf("capture.interval_sec must be > 0")
+	if c.Capture.IntervalSec < MinIntervalSec {
+		return fmt.Errorf("capture.interval_sec must be at least %d (one screenshot per minute at most)", MinIntervalSec)
+	}
+	if c.Capture.IntervalSec%MinIntervalSec != 0 {
+		return fmt.Errorf("capture.interval_sec must be a multiple of %d (whole minutes)", MinIntervalSec)
 	}
 	if q := c.Capture.JPEGQuality; q < 1 || q > 100 {
 		return fmt.Errorf("capture.jpeg_quality must be between 1 and 100")
+	}
+	if r := c.Storage.RetentionDays; r < 0 || r > MaxRetentionDays {
+		return fmt.Errorf("storage.retention_days must be between 1 and %d (or 0 to keep forever)", MaxRetentionDays)
 	}
 	return nil
 }
