@@ -64,7 +64,7 @@ const DBUS_INTERFACE = `
   </interface>
 </node>`;
 
-const EXTENSION_VERSION = 3;
+const EXTENSION_VERSION = 4;
 
 // Default web UI port (overridden by ~/.config/payam-logger/config.json).
 const DEFAULT_UI_PORT = 7530;
@@ -87,6 +87,10 @@ class PayamIndicator extends PanelMenu.Button {
         open.connect('activate', () => this._openUI());
         this.menu.addMenuItem(open);
 
+        const shots = new PopupMenu.PopupMenuItem('Open screenshots folder');
+        shots.connect('activate', () => this._openScreenshots());
+        this.menu.addMenuItem(shots);
+
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         const about = new PopupMenu.PopupMenuItem(`Payam Logger v${EXTENSION_VERSION} — ${this._url}`);
@@ -97,6 +101,18 @@ class PayamIndicator extends PanelMenu.Button {
     _openUI() {
         Gio.AppInfo.launch_default_for_uri(this._url, null)
             .catch(e => console.error(`[payam-logger] open UI: ${e.message}`));
+    }
+
+    _openScreenshots() {
+        const dir = GLib.build_filenamev(
+            [GLib.get_user_data_dir(), 'payam-logger', 'screenshots']);
+        GLib.mkdir_with_parents(dir, 0o700);
+        try {
+            Gio.AppInfo.launch_default_for_uri(GLib.filename_to_uri(dir, null), null)
+                .catch(e => console.error(`[payam-logger] open folder: ${e.message}`));
+        } catch (e) {
+            console.error(`[payam-logger] folder URI: ${e.message}`);
+        }
     }
 });
 
